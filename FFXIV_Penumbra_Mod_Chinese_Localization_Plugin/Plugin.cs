@@ -52,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     public AiConfigWindow AiConfigWindow { get; init; }
     public WikiExportWindow WikiExportWindow { get; init; }
     public LogWindow LogWindow { get; init; }
+    public FileListWindow FileListWindow { get; init; }
 
     public Plugin()
     {
@@ -94,6 +95,7 @@ public sealed class Plugin : IDalamudPlugin
         AiConfigWindow = new AiConfigWindow(this);
         WikiExportWindow = new WikiExportWindow(this);
         LogWindow = new LogWindow(this);
+        FileListWindow = new FileListWindow(this);
 
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(DictionaryWindow);
@@ -103,6 +105,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.AddWindow(AiConfigWindow);
         WindowSystem.AddWindow(WikiExportWindow);
         WindowSystem.AddWindow(LogWindow);
+        WindowSystem.AddWindow(FileListWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -372,6 +375,7 @@ public sealed class Plugin : IDalamudPlugin
         AiConfigWindow.Dispose();
         WikiExportWindow.Dispose();
         LogWindow.Dispose();
+        FileListWindow.Dispose();
         Penumbra.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
@@ -390,4 +394,5 @@ public sealed class Plugin : IDalamudPlugin
     public void ToggleAiConfigUi() => AiConfigWindow.Toggle();
     public void ToggleWikiUi() => WikiExportWindow.Toggle();
     public void ToggleLogUi() => LogWindow.Toggle();
+    public void ToggleFileListUi() => FileListWindow.Toggle();
 }

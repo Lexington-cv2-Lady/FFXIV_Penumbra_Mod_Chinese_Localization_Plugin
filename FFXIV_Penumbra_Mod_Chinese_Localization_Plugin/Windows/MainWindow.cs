@@ -643,7 +643,9 @@ public class MainWindow : Window, IDisposable
 
         ImGui.TextUnformatted("文件（点击查看选项）:");
         ImGui.Spacing();
-        foreach (var f in files)
+        // 文件多的模组（group 文件几十个）默认只显示前 3 条，折叠其余；「显示全部」走独立窗口
+        var shownFiles = files.Count > 4 ? files.Take(3).ToList() : files;
+        foreach (var f in shownFiles)
         {
             if (ImGui.Selectable($"{(f.IsMeta ? "[新] " : "")}{f.FileName}##file", ReferenceEquals(_selectedFile, f)))
             {
@@ -652,6 +654,18 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip($"文件：{f.FileName}\n完整路径：{f.Path}\n选项组：{f.Groups.Count} 个 / 选项：{CountOptions(f)} 项");
+            }
+        }
+        if (files.Count > 4)
+        {
+            Ui.Hint($"… 其余 {files.Count - 3} 个文件已折叠");
+            if (ImGui.Button($"显示全部 {files.Count} 个文件（独立窗口）"))
+            {
+                plugin.ToggleFileListUi();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("在独立窗口查看本模组全部文件与选项树（只读），可跳回主窗口编辑任意文件");
             }
         }
 
@@ -1422,6 +1436,32 @@ public class MainWindow : Window, IDisposable
         _snapStamp = stamp;
         _snapCache = parsed;
         return parsed;
+    }
+
+    /// <summary> 供文件总览窗口使用：当前聚焦的模组（未选中返回 null）。 </summary>
+    internal ModEntry? FocusedMod => _selected >= 0 && _selected < penumbra.Mods.Count ? penumbra.Mods[_selected] : null;
+
+    /// <summary> 供文件总览窗口使用：读取当前聚焦模组的文件列表（带 mtime 缓存）。 </summary>
+    internal List<ModFileInfo> FilesForFocusedMod()
+    {
+        var modRoot = penumbra.GetModRoot();
+        var mod = FocusedMod;
+        if (mod == null || string.IsNullOrEmpty(modRoot)) return new List<ModFileInfo>();
+        return ReadDetailFiles(Path.Combine(modRoot, mod.Directory));
+    }
+
+    /// <summary> 文件总览窗口跳转：主窗口选中指定文件并置前。 </summary>
+    public void FocusFile(string path)
+    {
+        var hit = FilesForFocusedMod().FirstOrDefault(x => x.Path == path);
+        if (hit != null)
+        {
+            _selectedFile = hit;
+            _editFileKey = hit.Path;
+            _editBufs.Clear();
+            _showAllOptions = false;
+        }
+        IsOpen = true;
     }
 
     private static int CountOptions(ModFileInfo f)
