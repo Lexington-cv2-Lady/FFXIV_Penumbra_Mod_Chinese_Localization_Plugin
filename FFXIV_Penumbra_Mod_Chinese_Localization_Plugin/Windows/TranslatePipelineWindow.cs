@@ -109,15 +109,16 @@ public class TranslatePipelineWindow : Window, IDisposable
         {
             ImGui.SetTooltip($"所有模组合并生成 {Path.Combine(transDir, "全部模组_未翻译.json")}\n适合整批交给外部 AI 翻译");
         }
-        Ui.SameLineIfFits(Ui.ButtonWidth("全选"));
-        // 全选（一键勾选全部未翻译模组，免去回主窗口逐个勾选）
-        if (ImGui.Button("全选"))
+        Ui.SameLineIfFits(Ui.ButtonWidth("全选") + ImGui.GetFrameHeight());
+        // 全选开关（与主窗口列表头、⑤区一致）：首点=全选当前列表，再点=全部取消
+        var allSelTop = _plugin.MainWindow.AllVisibleSelected;
+        if (ImGui.Checkbox("全选", ref allSelTop))
         {
-            _plugin.MainWindow.SetAllVisibleSelection(true);
+            _plugin.MainWindow.SetAllVisibleSelection(allSelTop);
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("勾选主窗口列表中的全部模组（按当前「已翻译」筛选：默认即全部未翻译模组）");
+            ImGui.SetTooltip("勾选=全选主窗口列表（按当前「已翻译」筛选：默认即全部未翻译模组）\n再点=全部取消勾选");
         }
         Ui.SameLineIfFits(ImGui.CalcTextSize($"已选 {_plugin.MainWindow.SelectedMods.Count} 个").X);
         Ui.Hint($"已选 {_plugin.MainWindow.SelectedMods.Count} 个");
