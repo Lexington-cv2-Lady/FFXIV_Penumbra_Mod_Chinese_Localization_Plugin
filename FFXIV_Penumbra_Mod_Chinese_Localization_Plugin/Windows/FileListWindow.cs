@@ -15,6 +15,7 @@ namespace FFXIVPenumbraHanhua.Windows;
 public class FileListWindow : Window, IDisposable
 {
     private readonly Plugin _plugin;
+    private string _search = ""; // 搜索：匹配文件名/组名/选项名/描述，未命中的文件与选项隐藏
 
     public FileListWindow(Plugin plugin) : base("文件总览###HanhuaFileList")
     {
@@ -49,16 +50,68 @@ public class FileListWindow : Window, IDisposable
         var totalGroups = files.Sum(f => f.Groups.Count);
         var totalOptions = files.Sum(f => f.Groups.Sum(g => g.Options.Count));
         ImGui.TextWrapped($"模组：{mod.Name}");
-        Ui.Hint($"文件 {files.Count} 个 / 选项组 {totalGroups} 个 / 选项 {totalOptions} 项　（绿色=已中文，橙色=未翻译；描述悬停可看）");
+
+        // 搜索框：匹配 文件名 / 组名 / 选项名 / 描述，只显示命中的文件与选项
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputTextWithHint("##FileSearch", "搜索文件 / 组 / 选项 / 描述…", ref _search, 256);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("不区分大小写；文件名命中显示整文件，组/选项/描述命中只显示命中部分");
+        }
+
+        var q = _search.Trim();
+        var display = new List<(ModFileInfo File, List<ModGroup> Groups, bool WholeFile)>();
+        foreach (var f in files)
+        {
+            if (q.Length == 0 || f.FileName.Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                display.Add((f, f.Groups, true));
+                continue;
+            }
+            var groups = new List<ModGroup>();
+            foreach (var g in f.Groups)
+            {
+                if (g.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrWhiteSpace(g.Description) && g.Description.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                {
+                    groups.Add(g);
+                    continue;
+                }
+                var opts = g.Options.Where(o =>
+                        o.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (!string.IsNullOrWhiteSpace(o.Description) && o.Description.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                if (opts.Count == 0) continue;
+                var part = new ModGroup { Index = g.Index, Name = g.Name, Description = g.Description };
+                part.Options.AddRange(opts);
+                groups.Add(part);
+            }
+            if (groups.Count > 0) display.Add((f, groups, false));
+        }
+
+        if (q.Length == 0)
+        {
+            Ui.Hint($"文件 {files.Count} 个 / 选项组 {totalGroups} 个 / 选项 {totalOptions} 项　（绿色=已中文，橙色=未翻译；描述悬停可看）");
+        }
+        else
+        {
+            Ui.Hint($"搜索「{q}」：命中 {display.Count} / {files.Count} 个文件　（绿色=已中文，橙色=未翻译；描述悬停可看）");
+        }
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
+
+        if (display.Count == 0)
+        {
+            Ui.Hint("没有匹配的文件/组/选项。");
+            return;
+        }
 
         using (var list = ImRaii.Child("##FileListScroll", new Vector2(0, -1), false))
         {
             if (list.Success)
             {
-                foreach (var f in files)
+                foreach (var (f, groups, whole) in display)
                 {
                     if (ImGui.Button($"编辑##edit{f.Path}", new Vector2(44f * ImGuiHelpers.GlobalScale, 0)))
                     {
@@ -72,9 +125,11 @@ public class FileListWindow : Window, IDisposable
                     if (ImGui.TreeNode($"{(f.IsMeta ? "[新] " : "")}{f.FileName}##tree{f.Path}"))
                     {
                         ImGui.SameLine();
-                        ImGui.TextDisabled($"组 {f.Groups.Count} / 选项 {CountOptions(f)}");
+                        ImGui.TextDisabled(whole
+                            ? $"组 {groups.Count} / 选项 {groups.Sum(g => g.Options.Count)}"
+                            : $"命中 {groups.Count} 组 / {groups.Sum(g => g.Options.Count)} 项");
                         ImGui.Indent();
-                        foreach (var g in f.Groups)
+                        foreach (var g in groups)
                         {
                             ImGui.TextColored(new Vector4(0.75f, 0.85f, 1f, 1f),
                                 string.IsNullOrEmpty(g.Description) ? $"组：{g.Name}" : $"组：{g.Name}　（{g.Description}）");
@@ -97,7 +152,9 @@ public class FileListWindow : Window, IDisposable
                     else
                     {
                         ImGui.SameLine();
-                        ImGui.TextDisabled($"组 {f.Groups.Count} / 选项 {CountOptions(f)}");
+                        ImGui.TextDisabled(whole
+                            ? $"组 {groups.Count} / 选项 {groups.Sum(g => g.Options.Count)}"
+                            : $"命中 {groups.Count} 组 / {groups.Sum(g => g.Options.Count)} 项");
                     }
                 }
             }

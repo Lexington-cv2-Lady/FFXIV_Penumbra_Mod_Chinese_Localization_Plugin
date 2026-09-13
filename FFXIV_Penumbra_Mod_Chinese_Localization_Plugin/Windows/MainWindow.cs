@@ -27,6 +27,7 @@ public class MainWindow : Window, IDisposable
     private int _selected = -1;
     private bool _autoRefresh = true;
     private bool _showMarked;   // 勾选「已翻译」：只看有标记的模组；默认只显示未翻译
+    private string _modSearch = ""; // 模组搜索（名称/目录，与「已翻译」筛选叠加）
 
     // 多选集合（批量翻译 / 批量备份）：存模组目录名（抗 Penumbra 列表增删导致的下标漂移）
     private readonly HashSet<string> _selectedSet = new(StringComparer.OrdinalIgnoreCase);
@@ -181,6 +182,14 @@ public class MainWindow : Window, IDisposable
         {
             if (left.Success)
             {
+                // 模组搜索框（名称/目录，与「已翻译」筛选叠加；全选等操作只作用于过滤后的可见列表）
+                ImGui.SetNextItemWidth(-1f);
+                ImGui.InputTextWithHint("##ModSearch", "搜索模组（名称 / 目录）…", ref _modSearch, 256);
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip("按名称或目录过滤当前列表；清空恢复全量。全选/已选计数只作用于过滤后的列表");
+                }
+                ImGui.Spacing();
                 var visible = BuildVisibleList();
                 DrawModListHeader(visible);
                 ImGui.Spacing();
@@ -347,6 +356,7 @@ public class MainWindow : Window, IDisposable
             _markCache.Clear();
             _markCacheTime = DateTime.Now;
         }
+        var q = _modSearch.Trim();
         var list = new List<int>();
         for (var i = 0; i < penumbra.Mods.Count; i++)
         {
@@ -356,7 +366,14 @@ public class MainWindow : Window, IDisposable
                 hasMark = plugin.Mark.HasMark(dir);
                 _markCache[dir] = hasMark;
             }
-            if (hasMark == _showMarked) list.Add(i);
+            if (hasMark != _showMarked) continue;
+            if (q.Length > 0
+                && !penumbra.Mods[i].Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                && !dir.Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            list.Add(i);
         }
         return list;
     }
