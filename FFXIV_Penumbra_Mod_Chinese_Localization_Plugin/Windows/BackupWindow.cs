@@ -303,10 +303,13 @@ public class BackupWindow : Window, IDisposable
             }
         }
 
-        // ── 底部按钮：创建选中备份（最左）/ 删除选中 / 还原选中备份（最右） ──
+        // ── 底部按钮：创建选中备份（左）/ 删除选中备份（行内居中）/ 还原选中备份（贴右缘） ──
         ImGui.Spacing();
+        var rowW = ImGui.GetContentRegionAvail().X; // 整行内容宽（画第一个按钮前量取）
+        var delW = Ui.ButtonWidth("删除选中备份");
+        var resW = Ui.ButtonWidth("还原选中备份");
 
-        // 最左：创建选中备份
+        // 左：创建选中备份
         if (ImGui.Button("创建选中备份"))
         {
             var m = 0;
@@ -324,9 +327,9 @@ public class BackupWindow : Window, IDisposable
             ImGui.SetTooltip("对左侧勾选的模组手动创建备份（meta.json + group_*.json）");
         }
 
-        Ui.SameLineIfFits(Ui.ButtonWidth("删除选中备份"));
-
-        // 中间：删除选中备份
+        // 中：删除选中备份（整行水平居中；窄窗口时不与左钮重叠）
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), (rowW - delW) / 2f));
         if (ImGui.Button("删除选中备份"))
         {
             var ok = 0;
@@ -344,9 +347,9 @@ public class BackupWindow : Window, IDisposable
             ImGui.SetTooltip("删除勾选的备份文件（移至回收站，误删可还原）");
         }
 
-        Ui.SameLineIfFits(Ui.ButtonWidth("还原选中备份"));
-
-        // 最右：还原选中
+        // 右：还原选中备份（贴右缘；窄窗口时不与中钮重叠）
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rowW - resW));
         if (ImGui.Button("还原选中备份"))
         {
             var ok = 0;
