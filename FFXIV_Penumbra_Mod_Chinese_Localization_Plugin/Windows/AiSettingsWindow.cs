@@ -67,6 +67,7 @@ public class AiSettingsWindow : Window, IDisposable
                 {
                     cfg.AiProviderName = item.Name;
                     cfg.AiProvider = -2; // 名称优先解析；下标仅兜底
+                    cfg.Save(); // 修改即保存
                     _testResult = $"已切换为「{item.Name}」，Key 各服务商独立保存";
                 }
                 if (sel) ImGui.SetItemDefaultFocus();
@@ -75,6 +76,7 @@ public class AiSettingsWindow : Window, IDisposable
             {
                 cfg.AiProviderName = "";
                 cfg.AiProvider = -1;
+                cfg.Save(); // 修改即保存
                 _testResult = "已切换为「自定义」，Key 各服务商独立保存";
             }
             if (manualMode) ImGui.SetItemDefaultFocus();
@@ -244,9 +246,10 @@ public class AiSettingsWindow : Window, IDisposable
         }
         ImGui.SameLine();
         var webSupported = AiTranslateService.PlatformSupportsWebSearch(cfg);
-        if (!webSupported)
+        if (!webSupported && cfg.AiWebSearch)
         {
-            cfg.AiWebSearch = false; // 平台不支持时自动关闭
+            cfg.AiWebSearch = false; // 平台不支持时自动关闭（值变化才落盘，避免每帧写盘）
+            cfg.Save();
         }
         var webSearch = cfg.AiWebSearch;
         ImGui.BeginDisabled(!webSupported);

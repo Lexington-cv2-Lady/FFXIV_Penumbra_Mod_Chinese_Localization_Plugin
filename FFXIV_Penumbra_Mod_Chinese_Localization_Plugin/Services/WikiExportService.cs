@@ -120,6 +120,7 @@ public sealed class WikiExportService
                 var rvCont = "";
                 var done = false;
                 var catPages = 0;
+                var catLogged = 0; // 已记录进度时的页数（按累计值每 100 页记一次，与单次响应批量大小无关）
                 log?.Invoke($"[提示] 开始抓取 {prefix} ...");
 
                 while (!done)
@@ -215,8 +216,11 @@ public sealed class WikiExportService
                         done = true;
                     }
 
-                    if (catPages > 0 && catPages % 100 == 0)
+                    if (catPages - catLogged >= 100)
+                    {
+                        catLogged = catPages;
                         log?.Invoke($"[进度] {type} 已处理 {catPages} 页，新增 {added} 条（命中已有 {hitExisting}，跳过）");
+                    }
                 }
             }
 
@@ -271,6 +275,11 @@ public sealed class WikiExportService
                     log?.Invoke($"[提示] 跳过 {catEmpty} 个抓取结果为 0 条的分类（灰机 wiki 无对应数据页，不生成空文件）");
                 CleanupEmptyCatFiles(catDir);
                 log?.Invoke($"[完成] wiki 分类术语已写入 词典目录\\wiki_术语对照\\（{catFiles} 个分类文件，独立只读底料，读取时自动生效）");
+            }
+            else if (summary.Count == 0)
+            {
+                // 全部失败/刚开始就取消：空结果不落盘，避免覆盖掉之前积累的 汇总.json
+                log?.Invoke("[提示] 本次未抓到任何术语，保留原有 汇总.json 不覆盖");
             }
             else
             {

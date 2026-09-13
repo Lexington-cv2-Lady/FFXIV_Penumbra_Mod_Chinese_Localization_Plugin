@@ -116,6 +116,7 @@ public class AiConfigWindow : Window, IDisposable
                 {
                     cfg.AiProviderName = item.Name;
                     cfg.AiProvider = -2;
+                    cfg.Save(); // 修改即保存
                     _result = $"已选中「{item.Name}」";
                 }
                 if (sel) ImGui.SetItemDefaultFocus();

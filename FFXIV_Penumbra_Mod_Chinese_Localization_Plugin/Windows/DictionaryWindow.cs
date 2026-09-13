@@ -10,7 +10,7 @@ using Dalamud.Interface.Windowing;
 namespace FFXIVPenumbraHanhua.Windows;
 
 /// <summary> 目录和词典管理窗口：词典/翻译目录设置、备份份数，以及词典加载状态与各来源词条统计。 </summary>
-public class DictionaryWindow : Window
+public class DictionaryWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
     private readonly FileDialogManager _fileDialog = new();
@@ -28,6 +28,12 @@ public class DictionaryWindow : Window
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
         this.plugin = plugin;
+    }
+
+    public void Dispose()
+    {
+        // 本版 Dalamud 的 FileDialogManager 未实现 IDisposable/Dispose（上游新版才有），暂无可释放接口；
+        // 插件卸载时程序集整体卸载，此处保底：后续上游提供清理接口时在此调用。
     }
 
     public override void Draw()
@@ -225,8 +231,8 @@ public class DictionaryWindow : Window
         ImGui.TextColored(new Vector4(0.8f, 0.9f, 1f, 1f), count.ToString("N0") + " 条");
     }
 
-    /// <summary> 用系统默认程序打开文件 / 资源管理器打开文件夹。 </summary>
-    private static void OpenPath(string path)
+    /// <summary> 用系统默认程序打开文件 / 资源管理器打开文件夹（失败给出提示，与 OpenFolder 行为一致）。 </summary>
+    private void OpenPath(string path)
     {
         try
         {
@@ -239,9 +245,9 @@ public class DictionaryWindow : Window
                 Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            /* 打开失败静默（系统环境限制） */
+            _openMsg = "打开失败：" + ex.Message;
         }
     }
 }

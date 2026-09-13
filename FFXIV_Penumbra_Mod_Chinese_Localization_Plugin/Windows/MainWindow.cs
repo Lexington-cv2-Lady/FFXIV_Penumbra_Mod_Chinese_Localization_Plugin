@@ -57,6 +57,8 @@ public class MainWindow : Window, IDisposable
     private string _result = "";
 
     // 一键汉化（智能分流）：①提取 → ②词典预填 → ③AI翻译（无Key自动降级）→ ④汇总 → ⑤写入本模组
+    // 后台任务约定：Task 内对 _ocStatus/_result 等状态字段只做整串赋值（引用写入原子，无读改写），
+    // UI 每帧轮询读取；后台不得对这些字段做 += 等复合操作，新增状态字段沿用整串赋值模式。
     private bool _ocSummary = true; // 提取方式：true=汇总提取（默认），false=按模组提取
     private Task? _ocTask;
     private CancellationTokenSource? _ocCts;
@@ -65,6 +67,15 @@ public class MainWindow : Window, IDisposable
     // 模组还原（HS API / 手动安装 PMP）
     private Task? _restoreTask;
     private string _restoreStatus = "";
+
+    // 详情区文件列表/英文快照缓存：Draw 每帧执行，按（目录 mtime, 内部 json 最大 mtime）判定失效，
+    // 避免大模组（数十 group 文件）每帧全量解析 JSON。仅 UI 线程访问。
+    private string? _detailFilesKey;
+    private (DateTime Dir, DateTime Files) _detailFilesStamp;
+    private List<ModFileInfo>? _detailFilesCache;
+    private string? _snapKey;
+    private DateTime _snapStamp;
+    private ModFileInfo? _snapCache;
 
     /// <summary> 翻译管线「仅提取勾选」用：当前勾选的模组列表（保持 Penumbra 列表顺序）。 </summary>
     public IReadOnlyList<ModEntry> SelectedMods
@@ -596,12 +607,12 @@ public class MainWindow : Window, IDisposable
         Ui.Hint($"目录：{mod.Directory}");
         ImGui.Spacing();
 
-        // 文件列表
+        // 文件列表（带缓存：每帧只做 mtime 校验，文件增删改自动失效）
         var modRoot = penumbra.GetModRoot();
         var files = new List<ModFileInfo>();
         if (!string.IsNullOrEmpty(modRoot))
         {
-            files = plugin.ModFiles.ReadModFiles(System.IO.Path.Combine(modRoot, mod.Directory));
+            files = ReadDetailFiles(System.IO.Path.Combine(modRoot, mod.Directory));
         }
 
         if (files.Count == 0)
@@ -626,7 +637,9 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        if (_selectedFile == null) _selectedFile = files[0];
+        // files 每帧重建为新对象：按 Path 重新绑定当前选中文件，
+        // 否则跨帧 ReferenceEquals 恒 false → 选中高亮丢失、编辑区用旧对象
+        _selectedFile = files.FirstOrDefault(x => x.Path == _selectedFile?.Path) ?? files[0];
 
         ImGui.TextUnformatted("文件（点击查看选项）:");
         ImGui.Spacing();
@@ -650,7 +663,7 @@ public class MainWindow : Window, IDisposable
         var file = _selectedFile!;
 
         // 原文对照：优先取英文快照（写入/翻译后文件已是中文，快照保留英文原文），无快照回退当前值
-        var snapInfo = plugin.Snapshot.GetEnglish(mod.Directory, file.FileName);
+        var snapInfo = GetEnglishCached(mod.Directory, file.FileName);
         string OriginalOf(int gIndex, int? oIndex, string current)
         {
             var g = snapInfo?.Groups.FirstOrDefault(x => x.Index == gIndex);
@@ -1359,6 +1372,51 @@ public class MainWindow : Window, IDisposable
         _editFileKey = _selectedFile?.Path ?? "";
         _editBufs.Clear();
         _showAllOptions = false;
+    }
+
+    /// <summary> 详情区专用 ReadModFiles：按（目录 mtime, 内部 json 最大 mtime）缓存，文件增删改自动失效。仅 UI 线程。 </summary>
+    private List<ModFileInfo> ReadDetailFiles(string modDir)
+    {
+        var stamp = (Dir: DateTime.MinValue, Files: DateTime.MinValue);
+        try
+        {
+            if (Directory.Exists(modDir))
+            {
+                stamp.Dir = Directory.GetLastWriteTimeUtc(modDir);
+                foreach (var f in Directory.EnumerateFiles(modDir, "*.json"))
+                {
+                    var t = File.GetLastWriteTimeUtc(f);
+                    if (t > stamp.Files) stamp.Files = t;
+                }
+            }
+        }
+        catch { /* 取 mtime 失败按未缓存处理 */ }
+
+        if (_detailFilesCache != null && _detailFilesKey == modDir && _detailFilesStamp.Equals(stamp))
+            return _detailFilesCache;
+
+        var list = plugin.ModFiles.ReadModFiles(modDir);
+        _detailFilesKey = modDir;
+        _detailFilesStamp = stamp;
+        _detailFilesCache = list;
+        return list;
+    }
+
+    /// <summary> 详情区专用英文快照读取：按快照文件 mtime 缓存解析结果。仅 UI 线程。 </summary>
+    private ModFileInfo? GetEnglishCached(string modDir, string fileName)
+    {
+        var p = Path.Combine(plugin.Configuration.DictionaryPath ?? "", ".英文快照", modDir, fileName);
+        DateTime stamp = DateTime.MinValue;
+        try { if (File.Exists(p)) stamp = File.GetLastWriteTimeUtc(p); } catch { }
+
+        var key = modDir + "|" + fileName;
+        if (_snapKey == key && _snapStamp == stamp) return _snapCache;
+
+        var parsed = plugin.Snapshot.GetEnglish(modDir, fileName);
+        _snapKey = key;
+        _snapStamp = stamp;
+        _snapCache = parsed;
+        return parsed;
     }
 
     private static int CountOptions(ModFileInfo f)

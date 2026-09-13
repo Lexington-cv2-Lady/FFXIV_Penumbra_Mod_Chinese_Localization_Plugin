@@ -364,6 +364,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
 
         MainWindow.Dispose();
+        DictionaryWindow.Dispose();
         PipelineWindow.Dispose();
         BackupWindow.Dispose();
         AiSettingsWindow.Dispose();
