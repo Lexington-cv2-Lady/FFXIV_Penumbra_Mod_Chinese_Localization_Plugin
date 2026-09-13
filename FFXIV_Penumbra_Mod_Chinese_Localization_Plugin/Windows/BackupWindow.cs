@@ -303,7 +303,7 @@ public class BackupWindow : Window, IDisposable
             }
         }
 
-        // ── 底部按钮：创建选中备份（最左）/ 还原选中 / 删除选中备份（最右） ──
+        // ── 底部按钮：创建选中备份（最左）/ 删除选中 / 还原选中备份（最右） ──
         ImGui.Spacing();
 
         // 最左：创建选中备份
@@ -324,29 +324,9 @@ public class BackupWindow : Window, IDisposable
             ImGui.SetTooltip("对左侧勾选的模组手动创建备份（meta.json + group_*.json）");
         }
 
-        Ui.SameLineIfFits(Ui.ButtonWidth("还原选中备份"));
-
-        // 还原选中
-        if (ImGui.Button("还原选中备份"))
-        {
-            var ok = 0;
-            foreach (var b in relevant)
-            {
-                if (_bakSet.Contains(b.BakPath) && _backup.Restore(modRoot, b)) ok++;
-            }
-            _result = _bakSet.Count == 0
-                ? "未勾选备份（右侧勾选要还原的备份）"
-                : $"已还原 {ok} 个备份（原备份已移至回收站，模组已还原为备份时的内容）";
-            _needRefresh = true;
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip("把备份内容覆盖回原文件（还原后该备份移至回收站）");
-        }
-
         Ui.SameLineIfFits(Ui.ButtonWidth("删除选中备份"));
 
-        // 最右：删除选中备份
+        // 中间：删除选中备份
         if (ImGui.Button("删除选中备份"))
         {
             var ok = 0;
@@ -362,6 +342,26 @@ public class BackupWindow : Window, IDisposable
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip("删除勾选的备份文件（移至回收站，误删可还原）");
+        }
+
+        Ui.SameLineIfFits(Ui.ButtonWidth("还原选中备份"));
+
+        // 最右：还原选中
+        if (ImGui.Button("还原选中备份"))
+        {
+            var ok = 0;
+            foreach (var b in relevant)
+            {
+                if (_bakSet.Contains(b.BakPath) && _backup.Restore(modRoot, b)) ok++;
+            }
+            _result = _bakSet.Count == 0
+                ? "未勾选备份（右侧勾选要还原的备份）"
+                : $"已还原 {ok} 个备份（原备份已移至回收站，模组已还原为备份时的内容）";
+            _needRefresh = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("把备份内容覆盖回原文件（还原后该备份移至回收站）");
         }
 
         ImGui.Spacing();
