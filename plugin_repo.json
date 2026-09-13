@@ -3,7 +3,7 @@
     "Author": "Lexington-cv2-Lady",
     "Name": "FFXIV_penumbra的模组汉化插件",
     "InternalName": "FFXIV_Penumbra_Mod_Chinese_Localization_Plugin",
-    "AssemblyVersion": "1.1.0.0",
+    "AssemblyVersion": "1.1.1.0",
     "Description": "读取 Penumbra 模组的选项与描述，用本地词典与 AI 批量汉化为简体中文，写回 meta.json / group_*.json 后自动触发 Penumbra 重载，游戏内即时生效。纯本地翻译，无遥测。\n汉化前自动备份（zip 按份数轮转），可一键还原且保留 Penumbra 的选项状态；支持 Penumbra 新旧双格式、纯中文输出、黑名单保留英文专名。\n词典来源：我的翻译 / 个性翻译 / wiki 术语对照 / AI 知识库 / 单词黑名单；AI 翻译内置多家国内主流服务商（按平台自动拆批），也支持导出后交给外部 AI 翻译再汇总。\n可将 Penumbra 模组的英文选项一键中文化，适合追求中文界面的玩家。",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
@@ -23,10 +23,10 @@
     "CategoryTags": [
       "utility"
     ],
-    "DownloadLinkInstall": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.0/FFXIV-Penumbra-Mod-Localization.zip",
-    "DownloadLinkTesting": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.0/FFXIV-Penumbra-Mod-Localization.zip",
-    "DownloadLinkUpdate": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.0/FFXIV-Penumbra-Mod-Localization.zip",
-    "LastUpdated": "2026-09-13T21:05:00+08:00",
+    "DownloadLinkInstall": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.1/FFXIV-Penumbra-Mod-Localization.zip",
+    "DownloadLinkTesting": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.1/FFXIV-Penumbra-Mod-Localization.zip",
+    "DownloadLinkUpdate": "https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases/download/v1.1.1/FFXIV-Penumbra-Mod-Localization.zip",
+    "LastUpdated": "2026-09-14T00:20:00+08:00",
     "DownloadCount": 0,
     "IsHide": false,
     "IsTestingExclusive": false,
