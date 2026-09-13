@@ -55,6 +55,9 @@ public class Configuration : IPluginConfiguration
     /// <summary> 联网搜索（仅通义/百炼 OpenAI 兼容端支持，其他平台自动失效）。 </summary>
     public bool AiWebSearch { get; set; }
 
+    /// <summary> 报错日志导出目录（空 = 插件数据目录，即 pluginConfigs\<ID>\）。 </summary>
+    public string LogExportPath { get; set; } = "";
+
     public void Save()
     {
         Plugin.PluginInterface.SavePluginConfig(this);

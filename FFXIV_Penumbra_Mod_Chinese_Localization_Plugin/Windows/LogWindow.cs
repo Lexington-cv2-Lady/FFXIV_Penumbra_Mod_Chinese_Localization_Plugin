@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
@@ -11,14 +14,18 @@ using FFXIVPenumbraHanhua.Services;
 
 namespace FFXIVPenumbraHanhua.Windows;
 
-/// <summary> 日志窗口：环形操作日志（新→旧）占主区，底部固定一条「最近报错」，顶部可打开日志文件。 </summary>
+/// <summary> 日志窗口：环形操作日志（新→旧）占主区，底部固定一条「最近报错」，顶部可打开日志文件；
+/// 支持一键导出「报错日志」zip（汉化日志.log + dalamud.log），导出目录默认插件数据目录、可修改。 </summary>
 public class LogWindow : Window, IDisposable
 {
+    private readonly Plugin _plugin;
     private readonly AppLog _log;
+    private readonly FileDialogManager _fileDialog = new();
     private bool _autoScroll = true;
     private string _openMsg = "";
+    private string _exportMsg = "";
 
-    public LogWindow(AppLog log) : base("日志###HanhuaLog")
+    public LogWindow(Plugin plugin) : base("日志###HanhuaLog")
     {
         Size = new Vector2(680, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -27,10 +34,19 @@ public class LogWindow : Window, IDisposable
             MinimumSize = new Vector2(480, 360),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
-        _log = log;
+        _plugin = plugin;
+        _log = plugin.AppLog;
     }
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        // 本版 Dalamud 的 FileDialogManager 无 Dispose 接口（同 DictionaryWindow），随插件卸载回收
+    }
+
+    /// <summary> 导出目录：配置了用配置，否则默认插件数据目录（pluginConfigs\&lt;ID&gt;\）。 </summary>
+    private string ExportDir => string.IsNullOrWhiteSpace(_plugin.Configuration.LogExportPath)
+        ? Plugin.PluginInterface.GetPluginConfigDirectory()
+        : _plugin.Configuration.LogExportPath.Trim();
 
     public override void Draw()
     {
@@ -58,6 +74,34 @@ public class LogWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextColored(new Vector4(1f, 0.5f, 0.2f, 1f), _openMsg);
         }
+        ImGui.Spacing();
+
+        // ── 导出报错日志：汉化日志 + dalamud.log 打包 zip，发给别人排查问题用 ──
+        if (ImGui.Button("导出报错日志"))
+        {
+            ExportLogs();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("把 汉化日志.log 与 Dalamud 的 dalamud.log 打包为「报错日志_时间戳.zip」\n（不含 API Key，可放心发给别人）");
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("打开导出目录"))
+        {
+            OpenFolder(ExportDir);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("在资源管理器打开导出目录");
+        }
+        if (_exportMsg.Length > 0)
+        {
+            ImGui.TextWrapped(_exportMsg);
+        }
+
+        // 导出目录行（与「目录和词典管理」同款式：输入框 + 打开/浏览/粘贴）
+        DrawExportDirRow();
+
         ImGui.Spacing();
 
         // ── 日志列表（可滚动，占主区） ──
@@ -111,6 +155,130 @@ public class LogWindow : Window, IDisposable
                     ImGui.PopStyleColor();
                 }
             }
+        }
+
+        // 文件选择对话框（浏览导出目录用，须每帧调用）
+        _fileDialog.Draw();
+    }
+
+    /// <summary> 导出报错日志：汉化日志.log + dalamud.log → 报错日志_时间戳.zip。 </summary>
+    private void ExportLogs()
+    {
+        try
+        {
+            var dir = ExportDir;
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                _exportMsg = "导出目录不可用：路径为空";
+                return;
+            }
+            Directory.CreateDirectory(dir);
+            var zipPath = Path.Combine(dir, $"报错日志_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.zip");
+
+            var files = new List<(string Src, string ArcName)>();
+            if (_log.FilePath is { } pluginLog && File.Exists(pluginLog))
+            {
+                files.Add((pluginLog, "汉化日志.log"));
+            }
+            // dalamud.log 与 pluginConfigs 同级（自动兼容 国服 XIVLauncherCN / 国际服 XIVLauncher）
+            var cfgDir = Plugin.PluginInterface.GetPluginConfigDirectory();
+            var launcherDir = Directory.GetParent(Directory.GetParent(cfgDir)!.FullName!)?.FullName;
+            if (!string.IsNullOrEmpty(launcherDir))
+            {
+                var dalamud = Path.Combine(launcherDir, "dalamud.log");
+                if (File.Exists(dalamud))
+                {
+                    files.Add((dalamud, "dalamud.log"));
+                }
+            }
+            if (files.Count == 0)
+            {
+                _exportMsg = "没有可导出的日志文件";
+                return;
+            }
+            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                foreach (var (src, arcName) in files)
+                {
+                    zip.CreateEntryFromFile(src, arcName);
+                }
+            }
+            _exportMsg = $"已导出 {files.Count} 个日志 → {zipPath}";
+        }
+        catch (Exception ex)
+        {
+            _exportMsg = "导出失败：" + ex.Message;
+        }
+    }
+
+    /// <summary> 导出目录行：输入框 + 打开/浏览/粘贴 三按钮（与「目录和词典管理」排版一致）。 </summary>
+    private void DrawExportDirRow()
+    {
+        ImGui.TextWrapped("导出目录（默认为插件数据目录，可修改）：");
+        var path = ExportDir;
+        var btnW = 56f * ImGuiHelpers.GlobalScale;
+        ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - btnW * 3 - 24f * ImGuiHelpers.GlobalScale));
+        if (ImGui.InputText("##ExportPath", ref path, 512))
+        {
+            _plugin.Configuration.LogExportPath = path;
+        }
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            _plugin.Configuration.Save(); // 修改即保存（回车/失焦时落盘，避免每键写盘）
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("打开##ExportOpen", new Vector2(btnW, 0)))
+        {
+            OpenFolder(ExportDir);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("用资源管理器打开该目录");
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("浏览##ExportBrowse", new Vector2(btnW, 0)))
+        {
+            _fileDialog.OpenFolderDialog("选择日志导出目录", (ok, p) =>
+            {
+                if (ok && !string.IsNullOrWhiteSpace(p))
+                {
+                    _plugin.Configuration.LogExportPath = p.Trim();
+                    _plugin.Configuration.Save();
+                }
+            });
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("弹出文件夹选择框，选择导出目录");
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("粘贴##ExportPaste", new Vector2(btnW, 0)))
+        {
+            var clip = ImGui.GetClipboardText();
+            if (!string.IsNullOrWhiteSpace(clip))
+            {
+                _plugin.Configuration.LogExportPath = clip.Trim();
+                _plugin.Configuration.Save();
+            }
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("读取剪贴板中的路径填入（无需 Ctrl+V）");
+        }
+    }
+
+    /// <summary> 用资源管理器打开目录（不存在则先创建）。 </summary>
+    private void OpenFolder(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _openMsg = "打开目录失败：" + ex.Message;
         }
     }
 

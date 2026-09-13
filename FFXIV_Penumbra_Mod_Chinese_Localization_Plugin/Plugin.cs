@@ -93,7 +93,7 @@ public sealed class Plugin : IDalamudPlugin
         AiSettingsWindow = new AiSettingsWindow(this);
         AiConfigWindow = new AiConfigWindow(this);
         WikiExportWindow = new WikiExportWindow(this);
-        LogWindow = new LogWindow(AppLog);
+        LogWindow = new LogWindow(this);
 
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(DictionaryWindow);
