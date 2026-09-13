@@ -111,8 +111,9 @@ public class TranslatePipelineWindow : Window, IDisposable
         }
         Ui.SameLineIfFits(Ui.ButtonWidth("全选") + ImGui.GetFrameHeight());
         // 全选开关（与主窗口列表头、⑤区一致）：首点=全选当前列表，再点=全部取消
+        // ##step1：同一窗口内与⑤区「全选」区分 ImGui ID（标签相同会 ID 撞车，点击全被先声明者截走）
         var allSelTop = _plugin.MainWindow.AllVisibleSelected;
-        if (ImGui.Checkbox("全选", ref allSelTop))
+        if (ImGui.Checkbox("全选##step1", ref allSelTop))
         {
             _plugin.MainWindow.SetAllVisibleSelection(allSelTop);
         }
@@ -284,7 +285,7 @@ public class TranslatePipelineWindow : Window, IDisposable
         Ui.SameLineIfFits(Ui.ButtonWidth("全选") + ImGui.GetFrameHeight());
         // 全选：勾选主窗口列表中全部模组（按当前「已翻译」筛选），与写入按钮同行便于直接开工
         var allSel = _plugin.MainWindow.AllVisibleSelected;
-        if (ImGui.Checkbox("全选", ref allSel))
+        if (ImGui.Checkbox("全选##step5", ref allSel))
         {
             _plugin.MainWindow.SetAllVisibleSelection(allSel);
         }
