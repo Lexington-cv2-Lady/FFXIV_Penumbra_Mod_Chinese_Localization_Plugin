@@ -13,16 +13,18 @@ public sealed class HanhuaService
     private readonly DictionaryService _dict;
     private readonly ModFileService _files;
     private readonly EnglishSnapshotService _snapshot;
+    private readonly AppLog _log;
 
     public string LastResult { get; private set; } = "尚未执行翻译";
 
     public HanhuaService(PenumbraService penumbra, DictionaryService dict, ModFileService files,
-        EnglishSnapshotService snapshot)
+        EnglishSnapshotService snapshot, AppLog log)
     {
         _penumbra = penumbra;
         _dict = dict;
         _files = files;
         _snapshot = snapshot;
+        _log = log;
     }
 
     /// <summary> 翻译并写入一个模组。返回翻译修改的条目数；失败返回 -1。 </summary>
@@ -32,6 +34,7 @@ public sealed class HanhuaService
         if (string.IsNullOrEmpty(modRoot))
         {
             LastResult = "无法获取 Penumbra 模组根目录";
+            _log.Warn($"[词典翻译写入] {modDirectory}：{LastResult}");
             return -1;
         }
 
@@ -39,6 +42,7 @@ public sealed class HanhuaService
         if (!Directory.Exists(modPath))
         {
             LastResult = $"模组目录不存在：{modPath}";
+            _log.Warn($"[词典翻译写入] {LastResult}");
             return -1;
         }
 
@@ -46,6 +50,7 @@ public sealed class HanhuaService
         if (fileInfos.Count == 0)
         {
             LastResult = "未找到 meta.json / group_*.json（该模组可能没有选项）";
+            _log.Info($"[词典翻译写入] {modDirectory}：{LastResult}");
             return 0;
         }
 
@@ -55,6 +60,7 @@ public sealed class HanhuaService
         if (zipBackup == null)
         {
             LastResult = "备份失败，已跳过写回（无 meta.json / group_*.json 或打包异常）";
+            _log.Error($"[词典翻译写入] {modDirectory}：{LastResult}");
             return -1;
         }
 
@@ -69,9 +75,9 @@ public sealed class HanhuaService
             {
                 _snapshot.SaveIfEnglish(modDirectory, file.FileName, File.ReadAllText(file.Path));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                /* 快照失败不影响主流程 */
+                _log.Warn($"[词典翻译写入] {modDirectory}/{file.FileName}：英文快照保存失败（覆写功能可能受影响）：{ex.Message}");
             }
             var snapInfo = _snapshot.GetEnglish(modDirectory, file.FileName);
 
@@ -146,6 +152,7 @@ public sealed class HanhuaService
         if (errors.Count > 0)
             sb.Append("；" + string.Join("；", errors.Take(3)) + (errors.Count > 3 ? $" 等 {errors.Count} 条提示" : ""));
         LastResult = sb.ToString();
+        _log.Info($"[词典翻译写入] {modDirectory}：{LastResult}");
         return totalChanged;
     }
 

@@ -16,6 +16,8 @@ public sealed class PenumbraService : IDisposable
     private readonly IDisposable _modAddedSub;
     private readonly IDisposable _modDeletedSub;
     private readonly IDisposable _disposedSub;
+    private readonly AppLog _log;
+    private bool? _lastConnected; // 记录上次连接状态：仅在状态翻转时记日志，避免每 3 秒重连探测刷屏
 
     /// <summary> Penumbra 可用状态变化（含初始连接成功）。 </summary>
     public event Action? ModsChanged;
@@ -32,8 +34,9 @@ public sealed class PenumbraService : IDisposable
     /// <summary> 最近一次获取模组列表的结果描述（供界面显示）。 </summary>
     public string Status { get; internal set; } = "未连接 Penumbra";
 
-    public PenumbraService(IDalamudPluginInterface pi)
+    public PenumbraService(IDalamudPluginInterface pi, AppLog log)
     {
+        _log = log;
         _getModList = new GetModList(pi);
         _reloadMod = new ReloadMod(pi);
         _getModDirectory = new GetModDirectory(pi);
@@ -54,6 +57,11 @@ public sealed class PenumbraService : IDisposable
                 .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             Status = $"Penumbra 已连接，共 {Mods.Count} 个模组";
+            if (_lastConnected != true)
+            {
+                _log.Info($"[Penumbra] 已连接（{Mods.Count} 个模组）");
+                _lastConnected = true;
+            }
             ModsChanged?.Invoke();
             return true;
         }
@@ -61,6 +69,11 @@ public sealed class PenumbraService : IDisposable
         {
             Mods = [];
             Status = $"Penumbra 不可用：{ex.Message}";
+            if (_lastConnected != false)
+            {
+                _log.Error($"[Penumbra] 连接失败：{ex.Message}");
+                _lastConnected = false;
+            }
             return false;
         }
     }

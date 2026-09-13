@@ -229,7 +229,11 @@ public sealed class ExtractService
         try
         {
             var root = JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject;
-            if (root == null) return -1;
+            if (root == null)
+            {
+                _log.Error($"[预翻译] 解析失败（已跳过）：{path}");
+                return -1;
+            }
             var hit = 0;
 
             foreach (var sec in new[] { "_options", "_descriptions" })
@@ -251,10 +255,12 @@ public sealed class ExtractService
             }
 
             File.WriteAllText(path, root.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+            _log.Info($"[预翻译] {Path.GetFileName(path)}：命中 {hit} 项");
             return hit;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _log.Error($"[预翻译] 文件处理失败（已跳过）：{path}：{ex.Message}");
             return -1;
         }
     }

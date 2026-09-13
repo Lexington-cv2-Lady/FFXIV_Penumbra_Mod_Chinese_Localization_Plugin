@@ -1153,11 +1153,13 @@ public class MainWindow : Window, IDisposable
                     msg = plugin.ModRestore.RestoreFromPmp(modFullPath, pmp, BackupNow);
                 }
                 plugin.Penumbra.Reload(mod.Directory, mod.Name);
+                plugin.AppLog.Info($"[重新下载] {mod.Name}：{msg}");
                 _restoreStatus = msg + " ✓";
                 _result = msg;
             }
             catch (Exception ex)
             {
+                plugin.AppLog.Error($"[重新下载] {mod.Name}：还原失败：{ex.Message}");
                 _restoreStatus = "还原失败：" + ex.Message;
                 _result = _restoreStatus;
             }
@@ -1277,6 +1279,7 @@ public class MainWindow : Window, IDisposable
             if (node == null)
             {
                 _result = "保存失败：无法解析文件";
+                plugin.AppLog.Error($"[保存修改] {mod.Directory}/{file.FileName}：解析失败，未写回");
                 return;
             }
 
@@ -1340,6 +1343,7 @@ public class MainWindow : Window, IDisposable
 
             File.WriteAllText(file.Path, node.ToJsonString(JsonFile.Indented));
             _result = $"已保存 {changed} 项修改（原文件已自动备份）";
+            plugin.AppLog.Info($"[保存修改] {mod.Directory}/{file.FileName}：已保存 {changed} 项（已自动备份）");
 
             if (sediments.Count > 0)
             {
@@ -1354,6 +1358,7 @@ public class MainWindow : Window, IDisposable
         catch (Exception ex)
         {
             _result = "保存失败：" + ex.Message;
+            plugin.AppLog.Error($"[保存修改] {mod.Directory}/{file.FileName}：保存失败：{ex.Message}");
         }
     }
 

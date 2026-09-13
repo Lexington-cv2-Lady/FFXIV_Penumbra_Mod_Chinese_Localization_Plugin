@@ -82,6 +82,7 @@ public class DictionaryWindow : Window, IDisposable
             plugin.MigrateDirectories();
             plugin.Snapshot.EnsureRoot();
             plugin.ReloadDictionary(); // 目录可能已变更：立即重载词典，避免旧内存词典不生效
+            plugin.AppLog.Info($"[配置] 已保存设置：词典 {configuration.DictionaryPath} / 翻译 {configuration.TranslationPath} / 备份份数 {configuration.BackupCount}");
             _saveMsg = "设置已保存，词典已重载";
         }
         if (ImGui.IsItemHovered())

@@ -71,12 +71,12 @@ public sealed class Plugin : IDalamudPlugin
             Configuration.Save();
             Log.Information($"已把旧版单一 API Key 迁移到「{legacyName}」（按服务商分存）");
         }
-        Penumbra = new PenumbraService(PluginInterface);
-        Dict = new DictionaryService();
+        AppLog = new AppLog(Path.Combine(PluginInterface.GetPluginConfigDirectory(), "汉化日志.log"));
+        Penumbra = new PenumbraService(PluginInterface, AppLog);
+        Dict = new DictionaryService(AppLog);
         ModFiles = new ModFileService { MaxBackups = Configuration.BackupCount };
         Snapshot = new EnglishSnapshotService(() => Configuration.DictionaryPath);
-        Hanhua = new HanhuaService(Penumbra, Dict, ModFiles, Snapshot);
-        AppLog = new AppLog(Path.Combine(PluginInterface.GetPluginConfigDirectory(), "汉化日志.log"));
+        Hanhua = new HanhuaService(Penumbra, Dict, ModFiles, Snapshot, AppLog);
         Mark = new MarkService(() => Penumbra.GetModRoot() ?? "");
         Extract = new ExtractService(Dict, ModFiles, AppLog);
         AiTranslate = new AiTranslateService(AppLog);
@@ -357,6 +357,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        AppLog.Info("[插件] 卸载，会话结束");
         PluginInterface.UiBuilder.Draw -= DrawAll;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleDictionaryUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;

@@ -13,6 +13,7 @@ namespace FFXIVPenumbraHanhua.Services;
 /// </summary>
 public sealed class DictionaryService
 {
+    private readonly AppLog _log;
     private readonly Dictionary<string, string> _terms = new();       // 大小写敏感词表
     private readonly Dictionary<string, string> _termsLower = new();   // 小写兜底词表
     private readonly Dictionary<string, string> _mods = new();         // mods 层整条（relKey||Opt||原文 -> 译文）
@@ -30,9 +31,15 @@ public sealed class DictionaryService
     public int AiCount { get; private set; }
     public int BlacklistCount => _blacklist.Count;
 
+    public DictionaryService(AppLog log)
+    {
+        _log = log;
+    }
+
     /// <summary> 加载指定目录的全部词典。返回是否成功。 </summary>
     public bool Load(string dictionaryDir)
     {
+        _log.Info($"[词典] 开始加载：{dictionaryDir}");
         DictionaryDir = dictionaryDir;
         _terms.Clear();
         _termsLower.Clear();
@@ -44,6 +51,7 @@ public sealed class DictionaryService
         if (string.IsNullOrWhiteSpace(dictionaryDir) || !Directory.Exists(dictionaryDir))
         {
             Status = "词典目录不存在：" + dictionaryDir;
+            _log.Error("[词典] " + Status);
             return false;
         }
 
@@ -70,6 +78,7 @@ public sealed class DictionaryService
         AiCount = LoadMergedDict(aiPath, isWiki: false, overlayOnly: true);
 
         Status = $"词典已加载：我的翻译 {MyCount} 条 / 个性翻译 {CustomCount} 条 / wiki {WikiCount} 条 / AI知识库 {AiCount} 条 / 黑名单 {_blacklist.Count} 词";
+        _log.Info("[词典] " + Status);
         return true;
     }
 
@@ -145,8 +154,9 @@ public sealed class DictionaryService
             }
             return count;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _log.Error($"[词典] 文件解析失败（已跳过）：{path}：{ex.Message}");
             return 0;
         }
     }
@@ -174,8 +184,9 @@ public sealed class DictionaryService
             }
             return count;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _log.Error($"[词典] 文件解析失败（已跳过）：{path}：{ex.Message}");
             return 0;
         }
     }
