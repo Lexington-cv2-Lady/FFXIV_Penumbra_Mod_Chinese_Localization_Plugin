@@ -716,8 +716,8 @@ public class MainWindow : Window, IDisposable
         }
 
         var rowW = ImGui.GetContentRegionAvail().X;
-        var pasteW = 44f * ImGuiHelpers.GlobalScale;
-        var inputW = Math.Max(120f, rowW - 230f * ImGuiHelpers.GlobalScale - pasteW - 8f * ImGuiHelpers.GlobalScale);
+        // 右侧预留 230*scale：原文灰字 + 行内间距；「贴」按钮删除后其宽度已并入输入框
+        var inputW = Math.Max(120f, rowW - 230f * ImGuiHelpers.GlobalScale);
         var shown = 0;
         var limit = _showAllOptions ? int.MaxValue : 30;
         var truncated = false;
@@ -733,15 +733,9 @@ public class MainWindow : Window, IDisposable
                 Ui.Hint(string.IsNullOrEmpty(g.Description) ? "组名：" : $"组名（{g.Description}）：");
                 ImGui.SetNextItemWidth(inputW);
                 if (ImGui.InputText($"##g{g.Index}", ref gv, 1024)) _editBufs[gk] = gv;
-                ImGui.SameLine();
-                if (ImGui.Button($"贴##gp{g.Index}", new Vector2(pasteW, 0)))
-                {
-                    var clip = ImGui.GetClipboardText();
-                    if (!string.IsNullOrWhiteSpace(clip)) _editBufs[gk] = clip.Trim();
-                }
                 if (ImGui.IsItemHovered())
                 {
-                    ImGui.SetTooltip("组名（可直接改中英文）\n原文：" + OriginalOf(g.Index, null, g.Name) + "\n「贴」= 读取剪贴板覆盖本框");
+                    ImGui.SetTooltip("组名（可直接改中英文）\n原文：" + OriginalOf(g.Index, null, g.Name));
                 }
                 shown++;
             }
@@ -756,13 +750,7 @@ public class MainWindow : Window, IDisposable
                 if (ImGui.InputText($"##e{shown}", ref v, 1024)) _editBufs[k] = v;
                 if (ImGui.IsItemHovered())
                 {
-                    ImGui.SetTooltip("输入框内可直接改中英文\n原文：" + origEn + "\n「贴」= 读取剪贴板覆盖本框");
-                }
-                ImGui.SameLine();
-                if (ImGui.Button($"贴##ep{shown}", new Vector2(pasteW, 0)))
-                {
-                    var clip = ImGui.GetClipboardText();
-                    if (!string.IsNullOrWhiteSpace(clip)) _editBufs[k] = clip.Trim();
+                    ImGui.SetTooltip("输入框内可直接改中英文\n原文：" + origEn);
                 }
                 ImGui.SameLine();
                 var orig = origEn.Length > 22 ? origEn.Substring(0, 22) + "…" : origEn;
