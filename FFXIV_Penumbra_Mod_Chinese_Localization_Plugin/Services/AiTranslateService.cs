@@ -71,12 +71,12 @@ public sealed class AiTranslateService
         ("通义千问", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1", "阿里云百炼（OpenAI 兼容，需先开通百炼）"),
         ("腾讯混元", "hunyuan-turbos-latest", "https://api.hunyuan.cloud.tencent.com/v1", "腾讯云大模型（OpenAI 兼容）"),
         ("百度千帆", "ernie-4.5-turbo-32k", "https://qianfan.baidubce.com/v2", "百度智能云千帆（OpenAI 兼容）"),
-        ("DeepSeek", "deepseek-chat", "https://api.deepseek.com/v1", "深度求索（OpenAI 兼容，国内可直连，性价比高）"),
-        ("OpenRouter", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1", "海外聚合中转，可调 GPT/Claude/Gemini"),
+        ("DeepSeek", "deepseek-flash", "https://api.deepseek.com/v1", "深度求索（OpenAI 兼容，国内可直连；deepseek-flash=DeepSeek-V4.1-Flash）"),
+        ("OpenRouter", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1", "海外聚合中转，可调 GPT/Claude/Gemini（模型名见 openrouter.ai/models）"),
         ("Groq", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1", "开源模型超高速推理（海外）"),
-        ("OpenAI（GPT）", "gpt-5.4-mini", "https://api.openai.com/v1", "官方接口：国内网络不可直连，需代理或中转"),
-        ("Google Gemini", "gemini-3.8-flash", "https://generativelanguage.googleapis.com/v1beta/openai", "谷歌官方 OpenAI 兼容端点：国内不可直连"),
-        ("Anthropic Claude", "claude-sonnet-4-6", "https://api.anthropic.com/v1", "Anthropic 官方：国内不可直连，需代理"),
+        ("OpenAI（GPT）", "gpt-5-mini", "https://api.openai.com/v1", "官方接口：国内网络不可直连，需代理或中转"),
+        ("Google Gemini", "gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai", "谷歌官方 OpenAI 兼容端点：国内不可直连"),
+        ("Anthropic Claude", "claude-sonnet-4-5", "https://api.anthropic.com/v1", "Anthropic 官方：国内不可直连，需代理"),
         ("xAI Grok", "grok-4.3", "https://api.x.ai/v1", "xAI 官方（OpenAI 兼容）：国内不可直连"),
         ("Mistral", "mistral-small-latest", "https://api.mistral.ai/v1", "Mistral 官方：国内不可直连")
     };
@@ -155,8 +155,10 @@ public sealed class AiTranslateService
             : Providers[Math.Clamp(cfg.AiProvider, 0, Providers.Length - 1)].Name;
     }
 
-    /// <summary> 单请求输出上限 max_tokens（按平台自动取官方安全值；未知平台沿用旧值避免 400）。
-    /// 数值须实测：超上限时服务端直接 400（如智谱返回「限制数值范围[1,16384]」）。 </summary>
+    /// <summary> 单请求输出上限 max_tokens（按平台自动；未知平台沿用旧值避免 400）。
+    /// ⚠ 取值原则：**宁可偏大不可偏小**——过大只是偶发 400（有自愈可自动纠正），
+    /// 过小会把译文输出**截断**导致整批 JSON 解析失败（且不报 400、不触发自愈）。
+    /// 须与 <see cref="MaxBatchChars"/> 的输入上限匹配（中文输出 token ≈ 字符数）。 </summary>
     public static long MaxTokensForModel(Configuration cfg)
     {
         // 必须用解析后的生效端点/模型判断平台（选预设服务商时 AiBaseUrl/AiModel 覆盖字段为空）
@@ -164,25 +166,29 @@ public sealed class AiTranslateService
         var m = (epModel ?? "").ToLowerInvariant();
         var b = (epUrl ?? "").ToLowerInvariant();
         if (b.Contains("deepseek") || m.Contains("deepseek"))
-            return 8192;   // DeepSeek 官方单请求输出上限
-        if (b.Contains("bigmodel") || b.Contains("moonshot"))
-            return 16384;  // 智谱 GLM：实测 max_tokens 上限 16384（超出即 400）；Kimi 同档保守值
+            return 384000; // DeepSeek 官方最大输出 384K（api-docs.deepseek.com 定价页）
+        if (b.Contains("bigmodel") || m.Contains("bigmodel") || b.Contains("moonshot"))
+            return 16384;  // 智谱 GLM：实测上限 16384（超出即 400）；Kimi 同档保守值
         if (b.Contains("dashscope") || b.Contains("aliyuncs"))
-            return 8192;   // 通义百炼
-        return 8192;       // 其余平台（Claude/Gemini 等上限交集；过高会 400，过低会截断输出）
+            return 32000;  // 通义百炼（与 20000 字符输入匹配）
+        return 16384;      // 其余平台：OpenAI gpt-4o 档位；Claude/Gemini 超出会 400 并由自愈纠正
     }
 
-    /// <summary> 单批输入内容字符上限（按平台自动，防止超长被拒；条数上限同时生效）。 </summary>
+    /// <summary> 单批输入内容字符上限（按平台自动，防止超长被拒；条数上限同时生效）。
+    /// ⚠ 必须与 <see cref="MaxTokensForModel"/> 的输出上限匹配：中文译文输出 token 数 ≈ 输入字符数，
+    /// 输入上限超过输出上限时译文会被截断 → 整批 JSON 解析失败。 </summary>
     public static int MaxBatchChars(Configuration cfg)
     {
         var (epUrl, epModel) = ResolveEndpoint(cfg);
         var m = (epModel ?? "").ToLowerInvariant();
         var b = (epUrl ?? "").ToLowerInvariant();
         if (b.Contains("deepseek") || m.Contains("deepseek"))
-            return 30000;  // DeepSeek 上下文大，单批可放宽
-        if (b.Contains("bigmodel") || b.Contains("moonshot") || b.Contains("dashscope") || b.Contains("aliyuncs"))
+            return 30000;  // DeepSeek：输出 384K，输入可放宽
+        if (b.Contains("bigmodel") || m.Contains("bigmodel"))
+            return 12000;  // 智谱：输出上限 16384 token，输入留足余量避免截断
+        if (b.Contains("moonshot") || b.Contains("dashscope") || b.Contains("aliyuncs"))
             return 20000;
-        return 12000;      // 其余平台保守值
+        return 12000;      // 其余平台保守值（对应 16384 输出上限）
     }
 
     /// <summary> 联网搜索：当前平台是否支持 OpenAI 兼容顶层 enable_search（仅通义/百炼）。 </summary>
@@ -521,7 +527,18 @@ public sealed class AiTranslateService
                     continue;
                 }
             }
-            return (false, null, $"HTTP {(int)resp.StatusCode} " + Truncate(content, 120));
+            // 模型名类错误（模型不存在/已下线）：平台模型名变化快，预设名可能过时 → 明确引导用户自行改
+            // ⚠ 必须同时认英文与中文提示：实测智谱返回中文「模型不存在，请检查模型代码。」（不含 "model" 字样）
+            var lowered = content.ToLowerInvariant();
+            var modelErr =
+                (lowered.Contains("model") && (lowered.Contains("not found") || lowered.Contains("not exist")
+                    || lowered.Contains("invalid") || lowered.Contains("unknown") || lowered.Contains("does not exist")))
+                || content.Contains("模型不存在") || content.Contains("模型代码")
+                || content.Contains("模型名") || content.Contains("模型已下线") || content.Contains("无效的模型");
+            var modelHint = modelErr
+                ? "（模型名可能已过时：请到「AI 设置」把模型改成该平台当前可用的模型名）"
+                : "";
+            return (false, null, $"HTTP {(int)resp.StatusCode} " + Truncate(content, 120) + modelHint);
         }
         return (false, null, "max_tokens 自愈重试后仍失败");
     }
