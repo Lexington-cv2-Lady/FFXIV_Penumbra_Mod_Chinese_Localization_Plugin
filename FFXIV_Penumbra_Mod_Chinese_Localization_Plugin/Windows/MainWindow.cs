@@ -65,6 +65,7 @@ public class MainWindow : Window, IDisposable
     private CancellationTokenSource? _ocCts;
     private string _ocStatus = "";
     private bool _ocGuidePending; // 无 Key 完成第一段后弹指引窗
+    private bool _ocStopRequested; // 已请求停止（避免重复点击反复改写状态文字）
     // 模组还原（HS API / 手动安装 PMP）
     private Task? _restoreTask;
     private string _restoreStatus = "";
@@ -849,11 +850,26 @@ public class MainWindow : Window, IDisposable
 
         if (_ocTask != null && !_ocTask.IsCompleted)
         {
+            // 翻译中：状态 + 红色「停止」按钮（中断类操作统一红色，一眼可辨）
             ImGui.TextWrapped(_ocStatus);
-            if (ImGui.Button("取消一键汉化"))
+            ImGui.Spacing();
+            Ui.PushDanger();
+            if (ImGui.Button("停止翻译", new Vector2(120f * ImGuiHelpers.GlobalScale, 0)) && !_ocStopRequested)
             {
+                _ocStopRequested = true;
                 _ocCts?.Cancel();
-                _ocStatus += "\n正在取消…（AI 请求会被中断，已翻译部分写盘保留）";
+                _ocStatus = "正在停止…（已中断当前请求；已翻完的部分会保留并写盘）";
+            }
+            Ui.PopDanger();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
+                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
+            }
+            if (_ocStopRequested)
+            {
+                ImGui.SameLine();
+                Ui.Hint("已请求停止，等待当前批次收尾…");
             }
         }
         else
@@ -970,6 +986,7 @@ public class MainWindow : Window, IDisposable
         var hasKey = !string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg));
         var summary = _ocSummary;
         _result = "";
+        _ocStopRequested = false; // 新一轮任务：复位停止标记
         _ocStatus = $"① 提取英文（{mods.Count} 个模组）…";
         _ocCts = new CancellationTokenSource();
         var ct = _ocCts.Token;
@@ -1101,11 +1118,26 @@ public class MainWindow : Window, IDisposable
 
         if (_ocTask != null && !_ocTask.IsCompleted)
         {
+            // 翻译中：状态 + 红色「停止」按钮（中断类操作统一红色，一眼可辨）
             ImGui.TextWrapped(_ocStatus);
-            if (ImGui.Button("取消一键汉化"))
+            ImGui.Spacing();
+            Ui.PushDanger();
+            if (ImGui.Button("停止翻译", new Vector2(120f * ImGuiHelpers.GlobalScale, 0)) && !_ocStopRequested)
             {
+                _ocStopRequested = true;
                 _ocCts?.Cancel();
-                _ocStatus += "\n正在取消…（AI 请求会被中断，已翻译部分写盘保留）";
+                _ocStatus = "正在停止…（已中断当前请求；已翻完的部分会保留并写盘）";
+            }
+            Ui.PopDanger();
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
+                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
+            }
+            if (_ocStopRequested)
+            {
+                ImGui.SameLine();
+                Ui.Hint("已请求停止，等待当前批次收尾…");
             }
         }
         else

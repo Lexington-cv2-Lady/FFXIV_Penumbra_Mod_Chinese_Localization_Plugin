@@ -31,6 +31,7 @@ public class TranslatePipelineWindow : Window, IDisposable
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
     private string _taskStatus = "";
+    private bool _stopRequested; // 已请求停止（避免重复点击反复改写状态文字）
 
     public TranslatePipelineWindow(Plugin plugin) : base("汉化流程###HanhuaPipeline")
     {
@@ -172,15 +173,20 @@ public class TranslatePipelineWindow : Window, IDisposable
         if (_task != null && !_task.IsCompleted)
         {
             ImGui.TextWrapped(_taskStatus);
-            if (ImGui.Button("取消 AI 翻译"))
+            ImGui.Spacing();
+            Ui.PushDanger();
+            if (ImGui.Button("停止翻译", new Vector2(120f * ImGuiHelpers.GlobalScale, 0)) && !_stopRequested)
             {
+                _stopRequested = true;
                 _cts?.Cancel();
-                _taskStatus = "正在取消…（已中断当前请求，已完成的部分会保存）";
-                _log.Info("AI 翻译：已请求取消，正在中断当前请求");
+                _taskStatus = "正在停止…（已中断当前请求；已翻完的部分会保留并写盘）";
+                _log.Info("AI 翻译：已请求停止，正在中断当前请求");
             }
+            Ui.PopDanger();
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("立即中断：正在进行的批次请求也会被取消，已完成的条目照常写出");
+                ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
+                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
             }
             Ui.Hint("翻译进行中…（可切到其他窗口，完成后回来查看）");
         }
@@ -188,29 +194,38 @@ public class TranslatePipelineWindow : Window, IDisposable
         {
             if (ImGui.Button("AI 翻译"))
             {
-                var files = ListUntranslatedFiles(transDir);
-                if (files.Count == 0)
+                // 未配 Key 时直接拦下并指路（避免白跑一趟才失败）
+                if (string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg)))
                 {
-                    _result = "未找到 _未翻译.json，请先执行 ① 提取英文";
+                    _result = "未填写 API Key：请到「AI 设置」配置，或改用「复制翻译提示词」交给外部 AI（零成本）";
                 }
                 else
                 {
-                    _result = "";
-                    _taskStatus = "AI 翻译进行中…";
-                    _cts = new CancellationTokenSource();
-                    var token = _cts.Token;
-                    _task = Task.Run(async () =>
+                    var files = ListUntranslatedFiles(transDir);
+                    if (files.Count == 0)
                     {
-                        var total = 0;
-                        foreach (var input in files)
+                        _result = "未找到 _未翻译.json，请先执行 ① 提取英文";
+                    }
+                    else
+                    {
+                        _result = "";
+                        _stopRequested = false; // 新一轮任务：复位停止标记
+                        _taskStatus = "AI 翻译进行中…";
+                        _cts = new CancellationTokenSource();
+                        var token = _cts.Token;
+                        _task = Task.Run(async () =>
                         {
-                            var output = Path.ChangeExtension(input, null) + "_已翻译.json";
-                            _taskStatus = $"AI 翻译中：{Path.GetFileName(input)}…";
-                            total += await _ai.TranslateAsync(input, output, cfg, token);
-                            if (token.IsCancellationRequested) break;
-                        }
-                        return total;
-                    });
+                            var total = 0;
+                            foreach (var input in files)
+                            {
+                                var output = Path.ChangeExtension(input, null) + "_已翻译.json";
+                                _taskStatus = $"AI 翻译中：{Path.GetFileName(input)}…";
+                                total += await _ai.TranslateAsync(input, output, cfg, token);
+                                if (token.IsCancellationRequested) break;
+                            }
+                            return total;
+                        });
+                    }
                 }
             }
             if (ImGui.IsItemHovered())
