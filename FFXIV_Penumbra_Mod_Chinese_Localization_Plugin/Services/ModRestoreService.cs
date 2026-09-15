@@ -36,7 +36,9 @@ public sealed class ModRestoreService
         }
         """;
 
-    private static readonly HttpClient Http = new();
+    /// <summary> Heliosphere 查询用的 HttpClient：设 30 秒超时——服务端挂起时尽快报错，
+    /// 而非用默认 100 秒让用户在「还原中…」界面干等。 </summary>
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     public string LastResult { get; private set; } = "";
 

@@ -297,7 +297,11 @@ public sealed class ExtractService
                     if (text.Length > 0) continue;
                     var parts = kv.Key.Split(new[] { "||" }, StringSplitOptions.None);
                     if (parts.Length != 3) continue;
-                    var translated = Translator.Translate(parts[2], parts[0], _dict);
+                    // mods 层 key 是「文件名||字段||原文」（DictionaryService 生成时不含模组目录前缀），
+                    // 而提取 key 的 parts[0] 是「模组目录/文件名」——须剥掉目录，否则整条精确查询恒不命中
+                    // （只能落到 terms 层兜底，会用通用译法覆盖文件级专属译法）。
+                    var modKey = $"{Path.GetFileName(parts[0])}||{parts[1]}||{parts[2]}";
+                    var translated = Translator.Translate(parts[2], modKey, _dict);
                     if (translated.Length > 0 && _dict.ContainsChinese(translated))
                     {
                         obj[kv.Key] = translated;
