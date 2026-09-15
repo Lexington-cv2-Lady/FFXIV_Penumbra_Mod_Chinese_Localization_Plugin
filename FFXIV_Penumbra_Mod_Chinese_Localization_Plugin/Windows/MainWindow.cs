@@ -614,8 +614,8 @@ public class MainWindow : Window, IDisposable
         else
         {
             ButtonWithShadow("打开", new Vector2(openW, 0), () => OpenModFolder(modFullPath),
-            "打开模组文件夹\n" + modFullPath);
-            }
+                "打开模组文件夹\n" + modFullPath);
+        }
         ImGui.SameLine();
         ImGui.TextUnformatted("模组：");
         ImGui.SameLine();
@@ -629,8 +629,10 @@ public class MainWindow : Window, IDisposable
         }
         if (isHsMod)
         {
+            // 提示（非按钮）：HS 模组这行是「重新下载」，说明打开文件夹要走点模组名。
+            // 用灰色不用彩色——彩色会让它看起来像个按不动的按钮；措辞直接写明操作方式。
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f), "打开"); // 文案提示：点模组名即打开文件夹
+            Ui.Hint("（点模组名打开文件夹）");
         }
         if (_restoreTask != null && !_restoreTask.IsCompleted)
         {
