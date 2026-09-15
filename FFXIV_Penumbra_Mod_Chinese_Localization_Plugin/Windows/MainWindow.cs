@@ -885,16 +885,6 @@ public class MainWindow : Window, IDisposable
             {
                 ImGui.SetTooltip("自动完成：提取本模组英文 → 词典预填 → AI 翻译（已配 Key 时）→ 汇总进词典 → 写回本模组并重载。\n未配置 Key 时自动停在词典预填，把生成的 _未翻译.json 交给外部 AI 即可。");
             }
-            Ui.SameLineIfFits(Ui.ButtonWidth("汇总并写入"));
-            if (ImGui.Button("汇总并写入"))
-            {
-                SumupAndWrite(new List<ModEntry> { mod });
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回本模组并重载。");
-            }
-            // 外部 AI 路线（推荐给能对话交流的 AI）：复制提示词 → 粘给 AI → 复制回复 → 导入译文
             Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
             if (ImGui.Button("复制翻译提示词"))
             {
@@ -913,6 +903,15 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("把 AI 回复的 JSON 复制后点这里：解析并写成 _已翻译.json，随后点「汇总并写入」完成写回。");
+            }
+            Ui.SameLineIfFits(Ui.ButtonWidth("汇总并写入"));
+            if (ImGui.Button("汇总并写入"))
+            {
+                SumupAndWrite(new List<ModEntry> { mod });
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回本模组并重载。");
             }
             // 轮询任务完成：清任务状态 + UI 线程收尾
             if (_ocTask != null && _ocTask.IsCompleted)
@@ -1154,16 +1153,6 @@ public class MainWindow : Window, IDisposable
                 ImGui.SetTooltip("对当前列表（默认即全部未翻译模组）自动完成：提取 → 词典预填 → AI 翻译（已配 Key 时）→ 汇总 → 写回并重载。\n" +
                                  "称「伪」：未配 Key 时会停在词典预填，需要人工把 _未翻译.json 交给外部 AI、翻好放回后点「汇总并写入」。");
             }
-            Ui.SameLineIfFits(Ui.ButtonWidth("汇总并写入"));
-            if (ImGui.Button("汇总并写入"))
-            {
-                SumupAndWrite(BuildVisibleList().Select(i => penumbra.Mods[i]).ToList());
-            }
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回当前列表全部模组并重载。");
-            }
-            // 外部 AI 路线（推荐给能对话交流的 AI）：复制提示词 → 粘给 AI → 复制回复 → 导入译文
             Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
             if (ImGui.Button("复制翻译提示词"))
             {
@@ -1182,6 +1171,15 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("把 AI 回复的 JSON 复制后点这里：解析并写成 _已翻译.json，随后点「汇总并写入」完成写回。");
+            }
+            Ui.SameLineIfFits(Ui.ButtonWidth("汇总并写入"));
+            if (ImGui.Button("汇总并写入"))
+            {
+                SumupAndWrite(BuildVisibleList().Select(i => penumbra.Mods[i]).ToList());
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回当前列表全部模组并重载。");
             }
             // 轮询任务完成：清任务状态 + UI 线程收尾
             if (_ocTask != null && _ocTask.IsCompleted)
