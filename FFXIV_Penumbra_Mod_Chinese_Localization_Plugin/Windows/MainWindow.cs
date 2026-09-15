@@ -68,6 +68,9 @@ public class MainWindow : Window, IDisposable
     // 模组还原（HS API / 手动安装 PMP）
     private Task? _restoreTask;
     private string _restoreStatus = "";
+    // 「重新下载」二次确认（覆盖模组文件的重操作）
+    private bool _restoreArmed2;
+    private DateTime _restoreArmedUntil2 = DateTime.MinValue;
 
     // 详情区文件列表/英文快照缓存：Draw 每帧执行，按（目录 mtime, 内部 json 最大 mtime）判定失效，
     // 避免大模组（数十 group 文件）每帧全量解析 JSON。仅 UI 线程访问。
@@ -586,8 +589,26 @@ public class MainWindow : Window, IDisposable
         }
         else if (isHsMod)
         {
-            ButtonWithShadow("重新下载", new Vector2(openW, 0), () => StartRestore(mod, modFullPath),
-                "从 Heliosphere 重新获取该模组的原始选项信息");
+            // 覆盖模组文件的重操作 → 二次确认（首次点击变「确认」，3 秒内再点才执行）
+            var rArmed = _restoreArmed2 && DateTime.Now < _restoreArmedUntil2;
+            if (rArmed) Ui.PushDanger();
+            ButtonWithShadow(rArmed ? "确认还原" : "重新下载", new Vector2(openW, 0),
+                () =>
+                {
+                    if (!rArmed)
+                    {
+                        _restoreArmed2 = true;
+                        _restoreArmedUntil2 = DateTime.Now.AddSeconds(3);
+                        _result = "⚠ 重新下载会覆盖本模组的选项文本（还原前自动备份），3 秒内再点一次确认";
+                    }
+                    else
+                    {
+                        _restoreArmed2 = false;
+                        StartRestore(mod, modFullPath);
+                    }
+                },
+                "从 Heliosphere 重新获取该模组的原始选项信息\n为防误点：首次点击只给确认提示，需 3 秒内再点一次");
+            if (rArmed) Ui.PopDanger();
         }
         else
         {
@@ -857,6 +878,26 @@ public class MainWindow : Window, IDisposable
             {
                 ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回本模组并重载。");
             }
+            // 外部 AI 路线（推荐给能对话交流的 AI）：复制提示词 → 粘给 AI → 复制回复 → 导入译文
+            Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
+            if (ImGui.Button("复制翻译提示词"))
+            {
+                CopyAiPrompt();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框。\n" +
+                                 "推荐用支持知识库、能对话交流的 AI（智谱清言 / 豆包桌面版 等）：可以补充设定、纠正译法，比硬套翻译准。");
+            }
+            Ui.SameLineIfFits(Ui.ButtonWidth("从剪贴板导入译文"));
+            if (ImGui.Button("从剪贴板导入译文"))
+            {
+                ImportFromClipboard();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("把 AI 回复的 JSON 复制后点这里：解析并写成 _已翻译.json，随后点「汇总并写入」完成写回。");
+            }
             // 轮询任务完成：清任务状态 + UI 线程收尾
             if (_ocTask != null && _ocTask.IsCompleted)
             {
@@ -1090,6 +1131,26 @@ public class MainWindow : Window, IDisposable
             {
                 ImGui.SetTooltip("外部 AI 翻完后点这个：把翻译目录里的 _已翻译.json 汇总进词典，再写回当前列表全部模组并重载。");
             }
+            // 外部 AI 路线（推荐给能对话交流的 AI）：复制提示词 → 粘给 AI → 复制回复 → 导入译文
+            Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
+            if (ImGui.Button("复制翻译提示词"))
+            {
+                CopyAiPrompt();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框。\n" +
+                                 "推荐用支持知识库、能对话交流的 AI（智谱清言 / 豆包桌面版 等）：可以补充设定、纠正译法，比硬套翻译准。");
+            }
+            Ui.SameLineIfFits(Ui.ButtonWidth("从剪贴板导入译文"));
+            if (ImGui.Button("从剪贴板导入译文"))
+            {
+                ImportFromClipboard();
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("把 AI 回复的 JSON 复制后点这里：解析并写成 _已翻译.json，随后点「汇总并写入」完成写回。");
+            }
             // 轮询任务完成：清任务状态 + UI 线程收尾
             if (_ocTask != null && _ocTask.IsCompleted)
             {
@@ -1102,6 +1163,133 @@ public class MainWindow : Window, IDisposable
         }
         ImGui.EndGroup();
         FrameLastGroup();
+    }
+
+    /// <summary>
+    /// 复制翻译提示词：把「格式要求 + 待翻译 JSON 全文」整段放进剪贴板，
+    /// 直接粘给任意 AI 对话框（含支持知识库的对话式 AI：智谱清言 / 豆包 等），比上传文件更省事。
+    /// </summary>
+    private void CopyAiPrompt()
+    {
+        var transDir = plugin.Configuration.TranslationPath;
+        if (string.IsNullOrWhiteSpace(transDir) || !Directory.Exists(transDir))
+        {
+            _result = "翻译目录未设置：请先在「目录和词典管理」配置";
+            return;
+        }
+        var files = Directory.GetFiles(transDir, "*_未翻译.json", SearchOption.TopDirectoryOnly).ToList();
+        if (files.Count == 0)
+        {
+            _result = "未找到 _未翻译.json：请先点「一键汉化（伪）」或到「汉化流程」① 提取英文";
+            return;
+        }
+        try
+        {
+            var prompt = plugin.Extract.BuildExternalPrompt(files);
+            ImGui.SetClipboardText(prompt);
+            var lines = prompt.Count(c => c == '\n');
+            _result = $"已复制翻译提示词（含 {files.Count} 个文件的待翻译内容）到剪贴板\n" +
+                      "把它整段粘给支持知识库、能对话交流的 AI（如 智谱清言 / 豆包桌面版），翻好后复制 AI 回复，回来点「从剪贴板导入译文」。";
+        }
+        catch (Exception ex)
+        {
+            _result = "生成提示词失败：" + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// 从剪贴板导入译文：解析 AI 回复的 JSON（容忍 ``` 包裹）→ 写成 _已翻译.json，
+    /// 随后点「汇总并写入」即可完成写回。闭合「复制提示词 → 对话式 AI → 导入」的外链路线。
+    /// </summary>
+    private void ImportFromClipboard()
+    {
+        var transDir = plugin.Configuration.TranslationPath;
+        if (string.IsNullOrWhiteSpace(transDir) || !Directory.Exists(transDir))
+        {
+            _result = "翻译目录未设置：请先在「目录和词典管理」配置";
+            return;
+        }
+        var text = ImGui.GetClipboardText();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _result = "剪贴板为空";
+            return;
+        }
+        var root = ParseJsonLenient(text);
+        if (root == null)
+        {
+            _result = "剪贴板内容不是合法 JSON：请复制 AI 回复的完整 JSON（以 { 开头、} 结尾）";
+            return;
+        }
+        if (root["_options"] is not JsonObject && root["_descriptions"] is not JsonObject)
+        {
+            _result = "JSON 里没有 _options / _descriptions：请让 AI 按提示词的输出结构重发";
+            return;
+        }
+        var count = 0;
+        foreach (var sec in new[] { "_options", "_descriptions" })
+        {
+            if (root[sec] is not JsonObject obj) continue;
+            foreach (var kv in obj)
+            {
+                var v = kv.Value?.ToString() ?? "";
+                if (v.Length > 0) count++;
+            }
+        }
+        if (count == 0)
+        {
+            _result = "JSON 里的译文全是空的：AI 可能只回显了原文，请重新让它翻译";
+            return;
+        }
+
+        // 与已有 _未翻译.json 配对命名（单个时同名替换，多个时用通用名）
+        var untranslated = Directory.GetFiles(transDir, "*_未翻译.json", SearchOption.TopDirectoryOnly).ToList();
+        var outName = untranslated.Count == 1
+            ? Path.GetFileName(untranslated[0]).Replace("_未翻译.json", "_已翻译.json")
+            : "剪贴板导入_已翻译.json";
+        var outPath = Path.Combine(transDir, outName);
+        try
+        {
+            // 保留翻译规则段，便于后续复用与追溯
+            if (root["翻译规则"] == null)
+                root["翻译规则"] = ExtractService.BuildTranslationRules(plugin.Configuration.DictionaryPath);
+            File.WriteAllText(outPath, root.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+            _result = $"已从剪贴板导入 {count} 项译文 → {outName}\n接着点「汇总并写入」即可写回模组。";
+        }
+        catch (Exception ex)
+        {
+            _result = "导入失败：" + ex.Message;
+        }
+    }
+
+    /// <summary> 宽松 JSON 解析：容忍 ```json 代码块与前后夹带的说明文字。 </summary>
+    private static JsonObject? ParseJsonLenient(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        text = text.Trim();
+        var fence = text.IndexOf("```");
+        if (fence >= 0)
+        {
+            var start = text.IndexOf('\n', fence);
+            var end = text.LastIndexOf("```");
+            if (start >= 0 && end > start) text = text[(start + 1)..end].Trim();
+        }
+        try
+        {
+            return JsonNode.Parse(text) as JsonObject;
+        }
+        catch (Exception)
+        {
+            // 截取首个 { 到末尾最后一个 }（AI 前后夹了说明文字时）
+            var b = text.IndexOf('{');
+            var e = text.LastIndexOf('}');
+            if (b >= 0 && e > b)
+            {
+                try { return JsonNode.Parse(text[b..(e + 1)]) as JsonObject; }
+                catch (Exception) { return null; }
+            }
+            return null;
+        }
     }
 
     /// <summary> 给刚用 BeginGroup/EndGroup 画好的内容区域外围加一个圆角框（自适应内容大小）。 </summary>

@@ -81,6 +81,7 @@ public sealed class Plugin : IDalamudPlugin
         Mark = new MarkService(() => Penumbra.GetModRoot() ?? "");
         Extract = new ExtractService(Dict, ModFiles, AppLog);
         AiTranslate = new AiTranslateService(AppLog);
+        AiTranslateService.ApplyProxyConfig(Configuration); // 启动即按配置应用代理（海外服务商需要）
         Import = new ImportService(ModFiles, Penumbra, AppLog, Mark, Snapshot);
         Backup = new BackupManager(ModFiles, Penumbra, AppLog, Snapshot, Mark);
         Sumup = new SumupService(AppLog, ModFiles, Snapshot);

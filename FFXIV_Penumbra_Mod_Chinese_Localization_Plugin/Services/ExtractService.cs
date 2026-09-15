@@ -209,6 +209,58 @@ public sealed class ExtractService
         return total;
     }
 
+    /// <summary>
+    /// 生成「交给外部 AI」的完整提示词：格式要求 + 合并后的待翻译内容全文。
+    /// 用户点一次即可整段粘贴到任意 AI 对话框（含支持知识库的对话式 AI），不必解释格式、不必上传文件；
+    /// AI 回复的 JSON 可直接用「从剪贴板导入译文」写回 _已翻译.json。
+    /// </summary>
+    public string BuildExternalPrompt(IReadOnlyList<string> inputPaths)
+    {
+        var options = new JsonObject();
+        var descriptions = new JsonObject();
+        foreach (var p in inputPaths)
+        {
+            if (!File.Exists(p)) continue;
+            if (JsonNode.Parse(File.ReadAllText(p, Encoding.UTF8)) is not JsonObject root) continue;
+            if (root["_options"] is JsonObject o)
+                foreach (var kv in o) options[kv.Key] = kv.Value?.DeepClone();
+            if (root["_descriptions"] is JsonObject d)
+                foreach (var kv in d) descriptions[kv.Key] = kv.Value?.DeepClone();
+        }
+
+        // 只把「仍为英文/空」的条目交给 AI（词典预填过的已命中项不重复送翻，省额度）
+        var pendingOptions = new JsonObject();
+        var pendingDescs = new JsonObject();
+        foreach (var kv in options)
+        {
+            var v = kv.Value?.ToString() ?? "";
+            if (v.Length == 0 || !_dict.ContainsChinese(v)) pendingOptions[kv.Key] = "";
+        }
+        foreach (var kv in descriptions)
+        {
+            var v = kv.Value?.ToString() ?? "";
+            if (v.Length == 0 || !_dict.ContainsChinese(v)) pendingDescs[kv.Key] = "";
+        }
+
+        var payload = new JsonObject
+        {
+            ["翻译规则"] = BuildTranslationRules(_dict.DictionaryDir),
+            ["_options"] = pendingOptions,
+            ["_descriptions"] = pendingDescs
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("请把下面 JSON 中 _options 与 _descriptions 的英文翻译为简体中文（纯中文，不带英文对照）。要求：");
+        sb.AppendLine("1. 所有键（含 || 分隔与字段名）必须原样保留，不许改动、不许增删、不许合并；");
+        sb.AppendLine("2. 只输出 JSON 本体，不要任何解释文字，不要用 ``` 代码块包裹；");
+        sb.AppendLine("3. 翻译规则 字段仅作参考，原样保留、不要翻译；");
+        sb.AppendLine("4. 专名（见 翻译规则 第 7 条）保留英文；同一文件内的选项用词要统一；");
+        sb.AppendLine("5. 输出结构与输入完全一致（同一份 JSON，只把值换成中文）。");
+        sb.AppendLine();
+        sb.Append(payload.ToJsonString());
+        return sb.ToString();
+    }
+
     /// <summary> 文件名清洗：剔除 Windows 非法字符，空名兜底。 </summary>
     private static string SanitizeFileName(string name)
     {

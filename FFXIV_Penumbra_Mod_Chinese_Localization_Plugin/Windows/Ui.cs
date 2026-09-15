@@ -41,6 +41,18 @@ internal static class Ui
     /// <summary> 弹出高亮配色。 </summary>
     public static void PopAccent() => ImGui.PopStyleColor(4);
 
+    /// <summary> 危险操作按钮配色（红色，用于覆盖文件的二次确认等）。配对 PopDanger。 </summary>
+    public static void PushDanger()
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.72f, 0.16f, 0.16f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.88f, 0.24f, 0.24f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.58f, 0.12f, 0.12f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 1f, 1f, 1f));
+    }
+
+    /// <summary> 弹出危险操作配色。 </summary>
+    public static void PopDanger() => ImGui.PopStyleColor(4);
+
     /// <summary> 估算文字按钮宽度（含左右内边距），供 SameLineIfFits 使用。 </summary>
     public static float ButtonWidth(string label)
         => ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;

@@ -29,6 +29,9 @@ public class BackupWindow : Window, IDisposable
 
     private string _result = "";
     private bool _needRefresh;
+    // 还原二次确认（覆盖模组的重操作）：首次点击变「再点一次确认」，3 秒内再点才执行
+    private bool _restoreArmed;
+    private DateTime _restoreArmedUntil = DateTime.MinValue;
     // 备份列表缓存：避免每帧全库磁盘枚举（5 秒过期；有勾选时不自动过期防下标漂移；操作后显式失效）
     private List<BackupManager.BackupInfo>? _backupsCache;
     private DateTime _backupsCacheTime = DateTime.MinValue;
@@ -348,23 +351,45 @@ public class BackupWindow : Window, IDisposable
         }
 
         // 右：还原选中备份（贴右缘；窄窗口时不与中钮重叠）
+        // 覆盖模组文件的重操作 → 二次确认：首次点击变「再点一次确认」，3 秒内再点才执行
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rowW - resW));
-        if (ImGui.Button("还原选中备份"))
+        var armed = _restoreArmed && DateTime.Now < _restoreArmedUntil;
+        if (armed)
         {
-            var ok = 0;
-            foreach (var b in relevant)
+            Ui.PushDanger();
+        }
+        if (ImGui.Button(armed ? "确认还原（覆盖模组）" : "还原选中备份"))
+        {
+            if (!armed)
             {
-                if (_bakSet.Contains(b.BakPath) && _backup.Restore(modRoot, b)) ok++;
+                _restoreArmed = true;
+                _restoreArmedUntil = DateTime.Now.AddSeconds(3);
+                _result = _bakSet.Count == 0
+                    ? "未勾选备份（右侧勾选要还原的备份）"
+                    : $"⚠ 将要还原 {_bakSet.Count} 个备份并覆盖模组文件，3 秒内再点一次确认";
             }
-            _result = _bakSet.Count == 0
-                ? "未勾选备份（右侧勾选要还原的备份）"
-                : $"已还原 {ok} 个备份（原备份已移至回收站，模组已还原为备份时的内容）";
-            _needRefresh = true;
+            else
+            {
+                _restoreArmed = false;
+                var ok = 0;
+                foreach (var b in relevant)
+                {
+                    if (_bakSet.Contains(b.BakPath) && _backup.Restore(modRoot, b)) ok++;
+                }
+                _result = _bakSet.Count == 0
+                    ? "未勾选备份（右侧勾选要还原的备份）"
+                    : $"已还原 {ok} 个备份（原备份已移至回收站，模组已还原为备份时的内容）";
+                _needRefresh = true;
+            }
+        }
+        if (armed)
+        {
+            Ui.PopDanger();
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("把备份内容覆盖回原文件（还原后该备份移至回收站）");
+            ImGui.SetTooltip("把备份内容覆盖回原文件（还原后该备份移至回收站）。\n为防误点：首次点击只给确认提示，需 3 秒内再点一次才真正执行。");
         }
 
         ImGui.Spacing();

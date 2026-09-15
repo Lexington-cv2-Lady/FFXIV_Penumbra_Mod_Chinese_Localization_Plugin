@@ -58,6 +58,13 @@ public class Configuration : IPluginConfiguration
     /// <summary> 报错日志导出目录（空 = 插件数据目录，即 pluginConfigs\<ID>\）。 </summary>
     public string LogExportPath { get; set; } = "";
 
+    // ── 网络代理（访问海外 AI 服务商时需要；国内服务商无需）──
+    /// <summary> AI 翻译是否走自定义代理。 </summary>
+    public bool UseProxy { get; set; }
+
+    /// <summary> 代理地址，如 http://127.0.0.1:7890（Clash / v2ray 等本地代理 HTTP 端口）。 </summary>
+    public string ProxyAddress { get; set; } = "";
+
     public void Save()
     {
         Plugin.PluginInterface.SavePluginConfig(this);

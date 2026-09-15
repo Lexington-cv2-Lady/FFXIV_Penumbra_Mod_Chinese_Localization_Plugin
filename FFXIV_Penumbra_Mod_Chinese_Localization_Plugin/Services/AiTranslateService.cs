@@ -16,18 +16,61 @@ namespace FFXIVPenumbraHanhua.Services;
 public sealed class AiTranslateService
 {
     private readonly AppLog _log;
-    private static readonly HttpClient Http = new();
+    /// <summary>
+    /// HttpClient 单例。走代理时需重建实例（HttpClient 创建后无法更换 Handler 的代理），
+    /// 由 <see cref="ApplyProxyConfig"/> 在启动与配置变更时刷新；旧的延迟释放（避免在飞请求被中断）。
+    /// </summary>
+    private static HttpClient Http = new();
+    private static readonly object HttpLock = new();
+
+    /// <summary> 按配置应用代理（未启用或地址为空 → 恢复系统默认代理行为）。 </summary>
+    public static void ApplyProxyConfig(Configuration cfg)
+    {
+        var useProxy = cfg.UseProxy && !string.IsNullOrWhiteSpace(cfg.ProxyAddress);
+        try
+        {
+            HttpClientHandler handler;
+            if (useProxy)
+            {
+                var addr = cfg.ProxyAddress.Trim();
+                if (!addr.Contains("://")) addr = "http://" + addr; // 容忍只填 ip:端口
+                handler = new HttpClientHandler
+                {
+                    Proxy = new System.Net.WebProxy(addr),
+                    UseProxy = true
+                };
+            }
+            else
+            {
+                handler = new HttpClientHandler(); // 默认：使用系统代理设置
+            }
+
+            var fresh = new HttpClient(handler);
+            lock (HttpLock)
+            {
+                var stale = Http;
+                Http = fresh;
+                // 延迟释放旧实例：可能仍有在飞请求持用它（立即 Dispose 会中断那些请求）
+                _ = Task.Delay(TimeSpan.FromMinutes(2)).ContinueWith(t => stale.Dispose());
+            }
+        }
+        catch (Exception)
+        {
+            /* 代理地址非法：保留原 HttpClient，不影响直连场景 */
+        }
+    }
 
     public string LastResult { get; private set; } = "";
 
-    /// <summary> 预置供应商（国内可直连的优先置顶，海外在后；自定义模式见 Combo 首项）。 </summary>
+    /// <summary> 预置供应商（国内可直连的优先置顶，海外在后；自定义模式见 Combo 首项）。
+    /// 默认模型一律选**免费档**（用户要求免费优先）：实测 glm-4-flash-250414 免费用、1.3 秒/批、JSON 稳定。 </summary>
     public static readonly (string Name, string Model, string BaseUrl, string Note)[] Providers =
     {
-        ("智谱 GLM", "GLM-4.5-Air", "https://open.bigmodel.cn/api/paas/v4", "智谱 AI 开放平台（OpenAI 兼容）"),
+        ("智谱 GLM", "glm-4-flash-250414", "https://open.bigmodel.cn/api/paas/v4", "★推荐·免费：glm-4-flash-250414（实测 1.3 秒/批，JSON 输出稳定、128K 长上下文）"),
         ("通义千问", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1", "阿里云百炼（OpenAI 兼容，需先开通百炼）"),
         ("腾讯混元", "hunyuan-turbos-latest", "https://api.hunyuan.cloud.tencent.com/v1", "腾讯云大模型（OpenAI 兼容）"),
         ("百度千帆", "ernie-4.5-turbo-32k", "https://qianfan.baidubce.com/v2", "百度智能云千帆（OpenAI 兼容）"),
-        ("DeepSeek", "deepseek-flash", "https://api.deepseek.com/v1", "深度求索（OpenAI 兼容，国内可直连，性价比高）"),
+        ("DeepSeek", "deepseek-chat", "https://api.deepseek.com/v1", "深度求索（OpenAI 兼容，国内可直连，性价比高）"),
         ("OpenRouter", "openai/gpt-4o-mini", "https://openrouter.ai/api/v1", "海外聚合中转，可调 GPT/Claude/Gemini"),
         ("Groq", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1", "开源模型超高速推理（海外）"),
         ("OpenAI（GPT）", "gpt-5.4-mini", "https://api.openai.com/v1", "官方接口：国内网络不可直连，需代理或中转"),
@@ -111,7 +154,8 @@ public sealed class AiTranslateService
             : Providers[Math.Clamp(cfg.AiProvider, 0, Providers.Length - 1)].Name;
     }
 
-    /// <summary> 单请求输出上限 max_tokens（按平台自动取官方安全值；未知平台沿用旧值避免 400）。 </summary>
+    /// <summary> 单请求输出上限 max_tokens（按平台自动取官方安全值；未知平台沿用旧值避免 400）。
+    /// 数值须实测：超上限时服务端直接 400（如智谱返回「限制数值范围[1,16384]」）。 </summary>
     public static long MaxTokensForModel(Configuration cfg)
     {
         // 必须用解析后的生效端点/模型判断平台（选预设服务商时 AiBaseUrl/AiModel 覆盖字段为空）
@@ -119,12 +163,12 @@ public sealed class AiTranslateService
         var m = (epModel ?? "").ToLowerInvariant();
         var b = (epUrl ?? "").ToLowerInvariant();
         if (b.Contains("deepseek") || m.Contains("deepseek"))
-            return 384000; // DeepSeek V4 官方单请求最大输出
+            return 8192;   // DeepSeek 官方单请求输出上限
         if (b.Contains("bigmodel") || b.Contains("moonshot"))
-            return 64000;  // 智谱 GLM / 月之暗面 Kimi：思考链占 token 大，适当放宽
+            return 16384;  // 智谱 GLM：实测 max_tokens 上限 16384（超出即 400）；Kimi 同档保守值
         if (b.Contains("dashscope") || b.Contains("aliyuncs"))
-            return 32000;  // 通义百炼
-        return 16384;      // 其余平台沿用旧值
+            return 8192;   // 通义百炼
+        return 8192;       // 其余平台（Claude/Gemini 等上限交集；过高会 400，过低会截断输出）
     }
 
     /// <summary> 单批输入内容字符上限（按平台自动，防止超长被拒；条数上限同时生效）。 </summary>

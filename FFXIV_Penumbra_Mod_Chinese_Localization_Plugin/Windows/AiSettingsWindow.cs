@@ -270,6 +270,42 @@ public class AiSettingsWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
 
+        // ── 网络代理（访问 OpenAI / Claude / Gemini 等海外服务商时需要）──
+        ImGui.TextUnformatted("网络代理（仅海外服务商需要；国内服务商留空即可）：");
+        var useProxy = cfg.UseProxy;
+        if (ImGui.Checkbox("启用代理", ref useProxy))
+        {
+            cfg.UseProxy = useProxy;
+            cfg.Save();
+            AiTranslateService.ApplyProxyConfig(cfg);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("勾选后，AI 翻译请求将通过下方代理地址发出。\n访问智谱 / 通义 / 腾讯 / 百度 / DeepSeek 等国内服务商时无需开启。");
+        }
+        ImGui.SameLine();
+        var proxyAddr = cfg.ProxyAddress;
+        ImGui.SetNextItemWidth(Math.Max(160f, ImGui.GetContentRegionAvail().X - 70f * ImGuiHelpers.GlobalScale));
+        ImGui.BeginDisabled(!cfg.UseProxy);
+        if (ImGui.InputTextWithHint("##ProxyAddr", "http://127.0.0.1:7890", ref proxyAddr, 256))
+        {
+            cfg.ProxyAddress = proxyAddr;
+        }
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            cfg.Save();
+            AiTranslateService.ApplyProxyConfig(cfg);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("代理地址，如 http://127.0.0.1:7890（Clash / v2ray 等本地代理的 HTTP 端口）。\n修改后回车或点击别处即生效。");
+        }
+        ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
         // 测试连接
         if (_testTask != null && !_testTask.IsCompleted)
         {
