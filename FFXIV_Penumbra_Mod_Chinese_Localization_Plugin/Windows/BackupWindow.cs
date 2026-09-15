@@ -316,18 +316,21 @@ public class BackupWindow : Window, IDisposable
         if (ImGui.Button("创建选中备份"))
         {
             var m = 0;
+            var noContent = 0;
             foreach (var dir in _modSet)
             {
                 if (_backup.ManualBackup(Path.Combine(modRoot, dir), _plugin.Configuration.BackupCount) > 0) m++;
+                else noContent++;
             }
             _result = _modSet.Count == 0
                 ? "未勾选模组（左侧勾选要备份的模组）"
-                : $"已创建备份：{m} 个模组（zip 轮转保留 {_plugin.Configuration.BackupCount} 份）";
+                : $"已创建备份：{m} 个模组（zip 轮转保留 {_plugin.Configuration.BackupCount} 份）" +
+                  (noContent > 0 ? $"\n另有 {noContent} 个模组无可备份的选项内容（纯文件替换类模组没有 meta.json 选项组 / group_*.json），已跳过" : "");
             _needRefresh = true;
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("对左侧勾选的模组手动创建备份（meta.json + group_*.json）");
+            ImGui.SetTooltip("对左侧勾选的模组手动创建备份（meta.json + group_*.json）\n纯文件替换类模组（无选项内容）无可备份内容，会自动跳过");
         }
 
         // 中：删除选中备份（整行水平居中；窄窗口时不与左钮重叠）

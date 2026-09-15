@@ -159,6 +159,7 @@ public sealed class BackupManager
     public int BackupMissing(IReadOnlyList<ModEntry> mods, string modRoot, int maxBackups)
     {
         var n = 0;
+        var noContent = 0;
         if (string.IsNullOrEmpty(modRoot)) return 0;
         foreach (var m in mods)
         {
@@ -168,6 +169,7 @@ public sealed class BackupManager
                 if (!Directory.Exists(dir)) continue;
                 if (Directory.GetFiles(dir, "*备份.zip").Length > 0) continue;
                 if (CreateModZip(dir, maxBackups) != null) n++;
+                else noContent++; // 无选项内容的模组：正常跳过（不记错误，仅汇总为一条提示）
             }
             catch
             {
@@ -175,6 +177,8 @@ public sealed class BackupManager
             }
         }
         if (n > 0) _log.Info($"[自动备份] 已为 {n} 个尚无备份的模组创建备份");
+        if (noContent > 0)
+            _log.Info($"[自动备份] {noContent} 个模组无可备份的选项内容（纯文件替换类，如武器/动作替换），已跳过");
         return n;
     }
 
@@ -205,8 +209,14 @@ public sealed class BackupManager
     }
 
     /// <summary> 创建模组 zip 备份（含日志）。 </summary>
+    /// <remarks>
+    /// 无 meta.json Groups / group_*.json 的模组（纯文件替换类，如武器/动作替换）**本来就没有可备份的选项内容**，
+    /// 属正常情况：静默返回 null、不记错误——否则每次启动扫描都会重试并记一条错误，刷屏并误导用户以为出故障。
+    /// 只有「有内容却打包失败」才记错误。
+    /// </remarks>
     public string? CreateModZip(string modDirPath, int maxBackups)
     {
+        if (_files.ReadModFiles(modDirPath).Count == 0) return null; // 无可备份内容：正常跳过，不记日志
         var zip = _files.CreateModZip(modDirPath, maxBackups);
         if (zip != null)
         {
@@ -214,7 +224,7 @@ public sealed class BackupManager
         }
         else
         {
-            _log.Error($"[备份] 创建备份失败：{modDirPath}（无 meta.json / group_*.json 或打包异常）");
+            _log.Error($"[备份] 创建备份失败：{modDirPath}（打包异常）");
         }
         return zip;
     }
