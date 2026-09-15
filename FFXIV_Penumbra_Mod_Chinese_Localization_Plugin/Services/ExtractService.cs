@@ -47,7 +47,7 @@ public sealed class ExtractService
         var words = TextListFile.Load(blPath);
         if (words.Count > 0)
         {
-            r["7. 专名保留"] = "以下为本次翻译必须原样保留的英文专名/标识（用户指定，禁止译成中文或改动），待翻译文本中出现这些词时照抄原样保留：" +
+            r["7. 专名保留"] = "以下为必须原样保留的英文专名/标识（来自用户词表，禁止译成中文或改动），待翻译文本中出现这些词时保持原样：" +
                 string.Join("、", words) + "。";
         }
 

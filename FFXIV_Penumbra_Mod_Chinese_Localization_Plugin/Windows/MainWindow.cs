@@ -892,8 +892,8 @@ public class MainWindow : Window, IDisposable
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框。\n" +
-                                 "推荐用支持知识库、能对话交流的 AI（智谱清言 / 豆包桌面版 等）：可以补充设定、纠正译法，比硬套翻译准。");
+                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框；\n" +
+                                 "翻好后复制 AI 回复，回来点「从剪贴板导入译文」。");
             }
             Ui.SameLineIfFits(Ui.ButtonWidth("从剪贴板导入译文"));
             if (ImGui.Button("从剪贴板导入译文"))
@@ -1160,8 +1160,8 @@ public class MainWindow : Window, IDisposable
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框。\n" +
-                                 "推荐用支持知识库、能对话交流的 AI（智谱清言 / 豆包桌面版 等）：可以补充设定、纠正译法，比硬套翻译准。");
+                ImGui.SetTooltip("把「格式要求 + 全部待翻译内容」整段复制到剪贴板，直接粘给任意 AI 对话框；\n" +
+                                 "翻好后复制 AI 回复，回来点「从剪贴板导入译文」。");
             }
             Ui.SameLineIfFits(Ui.ButtonWidth("从剪贴板导入译文"));
             if (ImGui.Button("从剪贴板导入译文"))
@@ -1219,7 +1219,7 @@ public class MainWindow : Window, IDisposable
             ImGui.SetClipboardText(prompt);
             var lines = prompt.Count(c => c == '\n');
             _result = $"已复制翻译提示词（含 {files.Count} 个文件的待翻译内容）到剪贴板\n" +
-                      "把它整段粘给支持知识库、能对话交流的 AI（如 智谱清言 / 豆包桌面版），翻好后复制 AI 回复，回来点「从剪贴板导入译文」。";
+                      "把它整段粘给 AI 对话框，翻好后复制 AI 回复，回来点「从剪贴板导入译文」。";
         }
         catch (Exception ex)
         {

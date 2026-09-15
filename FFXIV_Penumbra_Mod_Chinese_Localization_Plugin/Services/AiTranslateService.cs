@@ -64,7 +64,7 @@ public sealed class AiTranslateService
     public string LastResult { get; private set; } = "";
 
     /// <summary> 预置供应商（国内可直连的优先置顶，海外在后；自定义模式见 Combo 首项）。
-    /// 默认模型一律选**免费档**（用户要求免费优先）：实测 glm-4-flash-250414 免费用、1.3 秒/批、JSON 稳定。 </summary>
+    /// 默认模型取**免费档**（成本优先，免费档足以满足本插件的翻译需求）：实测 glm-4-flash-250414 免费用、1.3 秒/批、JSON 稳定。 </summary>
     public static readonly (string Name, string Model, string BaseUrl, string Note)[] Providers =
     {
         ("智谱 GLM", "glm-4-flash-250414", "https://open.bigmodel.cn/api/paas/v4", "★推荐·免费：glm-4-flash-250414（实测 1.3 秒/批，JSON 输出稳定、128K 长上下文）"),

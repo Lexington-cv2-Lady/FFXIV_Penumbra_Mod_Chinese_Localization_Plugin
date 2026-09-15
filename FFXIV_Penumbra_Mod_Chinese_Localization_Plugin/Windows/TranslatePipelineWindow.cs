@@ -262,7 +262,7 @@ public class TranslatePipelineWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("沉淀翻译到 我的翻译.json，之后翻译更准；没有 Key 走外部 AI 的用户，这一步就是独立版的「4. 汇总已翻译内容」");
+            ImGui.SetTooltip("沉淀翻译到 我的翻译.json：同一个词下次直接命中，不必重复翻译");
         }
         ImGui.Spacing();
         ImGui.Separator();
