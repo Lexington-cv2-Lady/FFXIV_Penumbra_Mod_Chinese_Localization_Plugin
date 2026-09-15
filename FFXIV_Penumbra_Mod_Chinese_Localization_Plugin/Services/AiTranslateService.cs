@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -372,30 +373,18 @@ public sealed class AiTranslateService
                 "只输出 JSON，不要输出任何其他文字。JSON 结构：{\"_options\":{...},\"_descriptions\":{...}}，键原样保留。\n\n" +
                 rules.ToJsonString();
 
-            var body = new JsonObject
-            {
-                ["model"] = model,
-                ["messages"] = new JsonArray(
-                    new JsonObject { ["role"] = "system", ["content"] = sysMsg },
-                    new JsonObject { ["role"] = "user", ["content"] = "待翻译内容（键必须原样保留，值填中文译文）：\n" + batchObj.ToJsonString() }),
-                ["temperature"] = cfg.AiTemperature,
-                ["max_tokens"] = MaxTokensForModel(cfg)
-            };
-            ApplyNoDeepThink(body, cfg);
-            ApplyWebSearch(body, cfg);
-
             try
             {
                 _log.Info($"AI 翻译：{Path.GetFileName(inputPath)} 批次 {bi + 1}/{batches.Count}（{batch.Count} 项，当前：{KeySummary(batch[0])}）");
-                var resp = await PostAsync(baseUrl, apiKey, body, ct);
-                var content = await resp.Content.ReadAsStringAsync(ct);
-                if (!resp.IsSuccessStatusCode)
+                // 带 max_tokens 自愈的请求（平台上限写错时：解析其自报上限 → 记住 → 以正确值重试本批一次）
+                var (reqOk, text, reqErr) = await SendBatchWithSelfHealAsync(
+                    baseUrl, apiKey, model, sysMsg, batchObj, cfg, ct);
+                if (!reqOk)
                 {
-                    errors.Add($"批次 {bi + 1}：HTTP {(int)resp.StatusCode} " + Truncate(content, 120));
+                    errors.Add($"批次 {bi + 1}：{reqErr}");
                     continue;
                 }
 
-                var text = ExtractContent(content);
                 var parsed = ParseJson(text);
                 if (parsed == null)
                 {
@@ -491,18 +480,106 @@ public sealed class AiTranslateService
         return await Http.SendAsync(req, ct); // 传入 token：取消时立即中断在飞请求，而非等它自然返回
     }
 
+    /// <summary>
+    /// 发送一批请求，含 max_tokens 自愈：平台拒绝（400 且提示 max_tokens）时解析其自报上限、
+    /// 记住并以正确值重试本批一次——任何平台上限写错最多只浪费一次请求，不会整轮白跑。
+    /// 返回 (是否成功, 正文文本, 错误摘要)；用户取消时抛 OperationCanceledException 由调用方处理。
+    /// </summary>
+    private async Task<(bool Ok, string? Text, string? Error)> SendBatchWithSelfHealAsync(
+        string baseUrl, string apiKey, string model, string sysMsg, JsonObject batchObj,
+        Configuration cfg, CancellationToken ct)
+    {
+        var maxTok = EffectiveMaxTokens(cfg, baseUrl);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var body = new JsonObject
+            {
+                ["model"] = model,
+                ["messages"] = new JsonArray(
+                    new JsonObject { ["role"] = "system", ["content"] = sysMsg },
+                    new JsonObject { ["role"] = "user", ["content"] = "待翻译内容（键必须原样保留，值填中文译文）：\n" + batchObj.ToJsonString() }),
+                ["temperature"] = cfg.AiTemperature,
+                ["max_tokens"] = maxTok
+            };
+            ApplyNoDeepThink(body, cfg);
+            ApplyWebSearch(body, cfg);
+
+            using var resp = await PostAsync(baseUrl, apiKey, body, ct);
+            var content = await resp.Content.ReadAsStringAsync(ct);
+            if (resp.IsSuccessStatusCode) return (true, ExtractContent(content), null);
+
+            // 自愈：400 且提到 max_tokens → 学上限、以正确值重试本批
+            if (attempt == 0 && (int)resp.StatusCode == 400 &&
+                content.Contains("max_tokens", StringComparison.OrdinalIgnoreCase))
+            {
+                var cap = ParseMaxTokensCap(content);
+                if (cap > 0)
+                {
+                    _maxTokensLearned[HostKey(baseUrl)] = cap;
+                    _log.Warn($"AI 翻译：平台拒绝 max_tokens（{Truncate(content, 100)}）——已自动下调到 {cap} 并重试本批");
+                    maxTok = cap;
+                    continue;
+                }
+            }
+            return (false, null, $"HTTP {(int)resp.StatusCode} " + Truncate(content, 120));
+        }
+        return (false, null, "max_tokens 自愈重试后仍失败");
+    }
+
     private static string? ExtractContent(string json)
     {
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            var msg = doc.RootElement.GetProperty("choices")[0].GetProperty("message");
+            var content = msg.TryGetProperty("content", out var c) ? c.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(content)) return content;
+            // 推理模型（deepseek-reasoner / glm-4.7-flash 等）思考过程放 reasoning_content：
+            // content 为空时兜底取用，避免整批被误判为「返回无法解析的内容」
+            if (msg.TryGetProperty("reasoning_content", out var rc)) return rc.GetString();
+            return content;
         }
         catch (Exception)
         {
             return null;
         }
     }
+
+    /// <summary>
+    /// 从平台报错里解析其允许的 max_tokens 上限，如智谱返回
+    /// <c>max_tokens参数非法：限制数值范围[1,16384]</c> → 16384。
+    /// 目的是**自愈**：任何平台上限写错，最多浪费一次请求即可自动纠正。
+    /// </summary>
+    private static long ParseMaxTokensCap(string errorBody)
+    {
+        try
+        {
+            var m = Regex.Match(errorBody, @"\[\s*\d+\s*,\s*(\d{2,9})\s*\]");
+            if (m.Success && long.TryParse(m.Groups[1].Value, out var cap) && cap > 0) return cap;
+        }
+        catch
+        {
+            /* 解析失败返回 0，走原错误路径 */
+        }
+        return 0;
+    }
+
+    private static string HostKey(string baseUrl)
+    {
+        try { return new Uri(baseUrl).Host; }
+        catch { return baseUrl ?? ""; }
+    }
+
+    /// <summary> 实际使用的 max_tokens：取「按平台估算值」与「运行中学到的上限」中较小者。 </summary>
+    private static long EffectiveMaxTokens(Configuration cfg, string baseUrl)
+    {
+        var want = MaxTokensForModel(cfg);
+        if (_maxTokensLearned.TryGetValue(HostKey(baseUrl), out var cap) && cap > 0 && cap < want) return cap;
+        return want;
+    }
+
+    /// <summary> 运行中学到的 max_tokens 上限（按端点 host 记）：被拒过一次后收敛到平台允许值。 </summary>
+    private static readonly Dictionary<string, long> _maxTokensLearned = new(StringComparer.OrdinalIgnoreCase);
 
     private static JsonObject? ParseJson(string? text)
     {
