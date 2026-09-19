@@ -15,7 +15,7 @@ using FFXIVPenumbraHanhua.Services;
 
 namespace FFXIVPenumbraHanhua.Windows;
 
-/// <summary> 半自动汉化流程窗口：① 提取英文 → ② 预翻译 → ③ AI 翻译 → ④ 汇总已翻译内容 → ⑤ 翻译写入MOD。 </summary>
+/// <summary> 半自动汉化流程窗口：① 提取英文 -> ② 预翻译 -> ③ AI 翻译 -> ④ 汇总已翻译内容 -> ⑤ 翻译写入MOD。 </summary>
 public class TranslatePipelineWindow : Window, IDisposable
 {
     private readonly Plugin _plugin;
@@ -61,7 +61,7 @@ public class TranslatePipelineWindow : Window, IDisposable
         var modRoot = _plugin.Penumbra.GetModRoot();
         var notFound = string.IsNullOrEmpty(modRoot) || !Directory.Exists(modRoot);
 
-        ImGui.TextWrapped("半自动流程：① 提取英文 → ② 预翻译（词典预填）→ ③ AI 翻译 → ④ 汇总已翻译内容（编入词典）→ ⑤ 翻译写入MOD。");
+        ImGui.TextWrapped("半自动流程：① 提取英文 -> ② 预翻译（词典预填）-> ③ AI 翻译 -> ④ 汇总已翻译内容（编入词典）-> ⑤ 翻译写入MOD。");
         ImGui.Spacing();
         Ui.Hint($"翻译目录：{transDir}（{(Directory.Exists(transDir) ? "存在" : "不存在，提取时会自动创建")}）");
         ImGui.Spacing();
@@ -120,7 +120,7 @@ public class TranslatePipelineWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("勾选=全选主窗口列表（按当前「已翻译」筛选：默认即全部未翻译模组）\n再点=全部取消勾选");
+            ImGui.SetTooltip("勾选即全选主窗口列表（按当前「已翻译」筛选：默认即全部未翻译模组）\n再点即全部取消勾选");
         }
         Ui.SameLineIfFits(ImGui.CalcTextSize($"已选 {_plugin.MainWindow.SelectedMods.Count} 个").X);
         Ui.Hint($"已选 {_plugin.MainWindow.SelectedMods.Count} 个");
@@ -165,8 +165,8 @@ public class TranslatePipelineWindow : Window, IDisposable
         Ui.Hint($"供应商：{providerName}（{AiTranslateService.ResolveEndpoint(cfg).Model}）");
         if (string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg)))
         {
-            Ui.SameLineIfFits(ImGui.CalcTextSize("　⚠ 未填写 API Key").X);
-            Ui.Hint("　⚠ 未填写 API Key");
+            Ui.SameLineIfFits(ImGui.CalcTextSize("　[!] 未填写 API Key").X);
+            Ui.Hint("　[!] 未填写 API Key");
         }
         ImGui.Spacing();
 
@@ -186,7 +186,7 @@ public class TranslatePipelineWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
-                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
+                                 "[!] 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
             }
             Ui.Hint("翻译进行中…（可切到其他窗口，完成后回来查看）");
         }
@@ -256,7 +256,7 @@ public class TranslatePipelineWindow : Window, IDisposable
                 {
                     total += _sumup.Sumup(f, cfg.DictionaryPath);
                 }
-                _result = $"汇总完成：{files.Count} 个文件，新增 {total} 条 → 我的翻译.json";
+                _result = $"汇总完成：{files.Count} 个文件，新增 {total} 条 -> 我的翻译.json";
                 if (total > 0) _plugin.ReloadDictionary();
             }
         }

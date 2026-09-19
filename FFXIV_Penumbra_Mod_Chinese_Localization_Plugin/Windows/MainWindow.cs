@@ -53,7 +53,7 @@ public class MainWindow : Window, IDisposable
     private ModFileInfo? _selectedFile;
     private string _result = "";
 
-    // 一键汉化（智能分流）：①提取 → ②词典预填 → ③AI翻译（无Key自动降级）→ ④汇总 → ⑤写入本模组
+    // 一键汉化（智能分流）：①提取 -> ②词典预填 -> ③AI翻译（无Key自动降级）-> ④汇总 -> ⑤写入本模组
     // 后台任务约定：Task 内对 _ocStatus/_result 等状态字段只做整串赋值（引用写入原子，无读改写），
     // UI 每帧轮询读取；后台不得对这些字段做 += 等复合操作，新增状态字段沿用整串赋值模式。
     private bool _ocSummary = true; // 提取方式：true=汇总提取（默认），false=按模组提取
@@ -151,7 +151,7 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        // 一键汉化（无 Key）第一段完成 → 打开指引弹窗（顶层作用域，详情区状态无关）
+        // 一键汉化（无 Key）第一段完成 -> 打开指引弹窗（顶层作用域，详情区状态无关）
         if (_ocGuidePending && (_ocTask == null || _ocTask.IsCompleted))
         {
             ImGui.OpenPopup("一键汉化：下一步");
@@ -219,7 +219,7 @@ public class MainWindow : Window, IDisposable
                                 var mod = penumbra.Mods[i];
                                 var isChecked = _selectedSet.Contains(mod.Directory);
                                 var rowTop = ImGui.GetCursorScreenPos().Y;
-                                // 紧凑行：小内边距 → 勾选框更小、行更矮，窗口缩小时一屏可见更多
+                                // 紧凑行：小内边距 -> 勾选框更小、行更矮，窗口缩小时一屏可见更多
                                 ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(3f, 2f) * ImGuiHelpers.GlobalScale);
                                 if (ImGui.Checkbox($"##sel{i}", ref isChecked) && interactive)
                                 {
@@ -235,7 +235,7 @@ public class MainWindow : Window, IDisposable
                                         _selectedSet.Remove(mod.Directory);
                                         if (_selected == i)
                                         {
-                                            _selected = -1; // 取消勾选 → 退回一键汉化（伪）视图
+                                            _selected = -1; // 取消勾选 -> 退回一键汉化（伪）视图
                                             _selectedFile = null;
                                             _result = "";
                                         }
@@ -255,10 +255,10 @@ public class MainWindow : Window, IDisposable
                                 _listDrag.Row(i, rowTop, rowTop + ImGui.GetFrameHeight());
                                 if (ImGui.IsItemHovered())
                                 {
-                                    ImGui.SetTooltip(mod.Directory + "\n点击 = 选中查看详情并切换勾选；按住左键拖动 = 框选多选");
+                                    ImGui.SetTooltip(mod.Directory + "\n点击即选中查看详情并切换勾选；按住左键拖动即框选多选");
                                 }
                             }
-                            // 框选命中 → 勾选（只增不减）
+                            // 框选命中 -> 勾选（只增不减）
                             foreach (var i in _listDrag.End()) _selectedSet.Add(penumbra.Mods[i].Directory);
                         }
                     }
@@ -327,8 +327,8 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         using (var logBox = ImRaii.Child("##MainLog", new Vector2(0, logH), true))
         {
-            var entries = plugin.AppLog.Snapshot(); // 新→旧
-            var show = entries.Take(6).Reverse().ToList(); // 旧→新显示
+            var entries = plugin.AppLog.Snapshot(); // 新->旧
+            var show = entries.Take(6).Reverse().ToList(); // 旧->新显示
             foreach (var e in show)
             {
                 var color = e.Lv switch
@@ -485,7 +485,7 @@ public class MainWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("① 提取英文 → ② 预翻译 → ③ AI 翻译 → ④ 汇总已翻译内容 → ⑤ 翻译写入MOD\n（⑤ 直写版即本页：勾选模组 → 翻译并写入）");
+            ImGui.SetTooltip("① 提取英文 -> ② 预翻译 -> ③ AI 翻译 -> ④ 汇总已翻译内容 -> ⑤ 翻译写入MOD\n（⑤ 直写版即本页：勾选模组 -> 翻译并写入）");
         }
         Ui.SameLineIfFits(Ui.ButtonWidth("备份管理"));
         if (ImGui.Button("备份管理"))
@@ -548,7 +548,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawDetail()
     {
-        // 详情区显示规则：勾选集中且点选了某模组 → 显示该模组详情；否则显示一键汉化（伪）批量区
+        // 详情区显示规则：勾选集中且点选了某模组 -> 显示该模组详情；否则显示一键汉化（伪）批量区
         var focusedDir = _selected >= 0 && _selected < penumbra.Mods.Count
             ? penumbra.Mods[_selected].Directory : null;
         if (focusedDir == null || !_selectedSet.Contains(focusedDir))
@@ -563,19 +563,19 @@ public class MainWindow : Window, IDisposable
                 ImGui.Spacing();
                 if (dictMissing)
                 {
-                    Ui.ColoredWrapped(new Vector4(1f, 0.75f, 0.3f, 1f), "⚠ 词典目录未设置（存放 我的翻译 / 个性翻译 / wiki 术语 / AI知识库）");
+                    Ui.ColoredWrapped(new Vector4(1f, 0.75f, 0.3f, 1f), "[!] 词典目录未设置（存放 我的翻译 / 个性翻译 / wiki 术语 / AI知识库）");
                 }
                 else
                 {
-                    Ui.ColoredWrapped(new Vector4(0.55f, 0.9f, 0.55f, 1f), "✓ 词典目录已设置");
+                    Ui.ColoredWrapped(new Vector4(0.55f, 0.9f, 0.55f, 1f), "词典目录已设置");
                 }
                 if (transMissing)
                 {
-                    Ui.ColoredWrapped(new Vector4(1f, 0.75f, 0.3f, 1f), "⚠ 翻译目录未设置（提取英文 / AI翻译 的输入输出目录）");
+                    Ui.ColoredWrapped(new Vector4(1f, 0.75f, 0.3f, 1f), "[!] 翻译目录未设置（提取英文 / AI翻译 的输入输出目录）");
                 }
                 else
                 {
-                    Ui.ColoredWrapped(new Vector4(0.55f, 0.9f, 0.55f, 1f), "✓ 翻译目录已设置");
+                    Ui.ColoredWrapped(new Vector4(0.55f, 0.9f, 0.55f, 1f), "翻译目录已设置");
                 }
                 ImGui.Spacing();
                 if (ImGui.Button("打开目录和词典管理，配置目录"))
@@ -590,7 +590,7 @@ public class MainWindow : Window, IDisposable
                 Ui.Hint("目录设置完成后，本提示自动消失，可正常开始汉化。");
                 return;
             }
-            Ui.Hint("← 点击模组名称 = 勾选并查看/编辑详情；未勾选时可在下方一键汉化当前列表：");
+            Ui.Hint("点击模组名称：勾选并查看/编辑详情；未勾选时可在下方一键汉化当前列表：");
             ImGui.Spacing();
             DrawOneClickAll();
             return;
@@ -611,7 +611,7 @@ public class MainWindow : Window, IDisposable
         }
         else if (isHsMod)
         {
-            // 覆盖模组文件的重操作 → 二次确认（首次点击变「确认」，3 秒内再点才执行）
+            // 覆盖模组文件的重操作 -> 二次确认（首次点击变「确认」，3 秒内再点才执行）
             var rArmed = _restoreArmed2 && DateTime.Now < _restoreArmedUntil2;
             if (rArmed) Ui.PushDanger();
             ButtonWithShadow(rArmed ? "确认还原" : "重新下载", new Vector2(openW, 0),
@@ -621,7 +621,7 @@ public class MainWindow : Window, IDisposable
                     {
                         _restoreArmed2 = true;
                         _restoreArmedUntil2 = DateTime.Now.AddSeconds(3);
-                        _result = "⚠ 重新下载会覆盖本模组的选项文本（还原前自动备份），3 秒内再点一次确认";
+                        _result = "[!] 重新下载会覆盖本模组的选项文本（还原前自动备份），3 秒内再点一次确认";
                     }
                     else
                     {
@@ -700,7 +700,7 @@ public class MainWindow : Window, IDisposable
         }
 
         // files 每帧重建为新对象：按 Path 重新绑定当前选中文件，
-        // 否则跨帧 ReferenceEquals 恒 false → 选中高亮丢失、编辑区用旧对象
+        // 否则跨帧 ReferenceEquals 恒 false -> 选中高亮丢失、编辑区用旧对象
         _selectedFile = files.FirstOrDefault(x => x.Path == _selectedFile?.Path) ?? files[0];
 
         ImGui.TextUnformatted("文件（点击查看选项）:");
@@ -789,7 +789,7 @@ public class MainWindow : Window, IDisposable
                 {
                     _restoreBakArmed = true;
                     _restoreBakArmedUntil = DateTime.Now.AddSeconds(3);
-                    _result = $"⚠ 将用最新备份「{latestBak.FileName}」还原本模组（覆盖当前选项文本，保留已勾选状态），3 秒内再点一次确认";
+                    _result = $"[!] 将用最新备份「{latestBak.FileName}」还原本模组（覆盖当前选项文本，保留已勾选状态），3 秒内再点一次确认";
                 }
                 else
                 {
@@ -814,7 +814,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
         ImGui.BeginGroup();
-        ImGui.TextWrapped("一键汉化（提取 → 词典预填 → AI翻译 → 汇总 → 写入本模组）");
+        ImGui.TextWrapped("一键汉化（提取 -> 词典预填 -> AI翻译 -> 汇总 -> 写入本模组）");
         if (ImGui.RadioButton("汇总提取（默认）", _ocSummary)) _ocSummary = true;
         Ui.SameLineIfFits(Ui.ButtonWidth("按模组提取") + ImGui.GetFrameHeight());
         if (ImGui.RadioButton("按模组提取", !_ocSummary)) _ocSummary = false;
@@ -839,7 +839,7 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
-                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
+                                 "[!] 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
             }
             if (_ocStopRequested)
             {
@@ -850,7 +850,7 @@ public class MainWindow : Window, IDisposable
         else
         {
             Ui.PushAccent();
-            var aiClicked = ImGui.Button("AI 一键汉化（提取→AI→汇总→写入）");
+            var aiClicked = ImGui.Button("AI 一键汉化（提取->AI->汇总->写入）");
             Ui.PopAccent();
             if (aiClicked)
             {
@@ -858,7 +858,7 @@ public class MainWindow : Window, IDisposable
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("自动完成：提取本模组英文 → 词典预填 → AI 翻译（已配 Key 时）→ 汇总进词典 → 写回本模组并重载。\n未配置 Key 时自动停在词典预填，把生成的 _未翻译.json 交给外部 AI 即可。");
+                ImGui.SetTooltip("自动完成：提取本模组英文 -> 词典预填 -> AI 翻译（已配 Key 时）-> 汇总进词典 -> 写回本模组并重载。\n未配置 Key 时自动停在词典预填，把生成的 _未翻译.json 交给外部 AI 即可。");
             }
             Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
             if (ImGui.Button("复制翻译提示词"))
@@ -923,8 +923,8 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// 一键汉化（智能分流）：① 提取（默认汇总提取，可选按模组）→ ② 词典预填 →
-    /// 有 Key：③ AI 翻译 → ④ 汇总 → ⑤ 写回；无 Key：停在 ②，引导走外部 AI 后用「汇总并写入」。
+    /// 一键汉化（智能分流）：① 提取（默认汇总提取，可选按模组）-> ② 词典预填 ->
+    /// 有 Key：③ AI 翻译 -> ④ 汇总 -> ⑤ 写回；无 Key：停在 ②，引导走外部 AI 后用「汇总并写入」。
     /// mods 可以是单个模组（详情区）也可以是当前列表全部（未选中时的“一键汉化（伪）”）。
     /// </summary>
     private void StartOneClick(List<ModEntry> mods)
@@ -982,7 +982,7 @@ public class MainWindow : Window, IDisposable
                 }
                 var outputs = plugin.Extract.LastOutputPaths.ToList();
                 log.Append(plugin.Extract.LastResult);
-                _ocStatus = $"① 提取完成（{n} 项）→ ② 词典预填…";
+                _ocStatus = $"① 提取完成（{n} 项）-> ② 词典预填…";
 
                 // ② 词典预填（能翻的先翻上，交给 AI 的就少了）
                 var hit = 0;
@@ -991,7 +991,7 @@ public class MainWindow : Window, IDisposable
 
                 if (!hasKey)
                 {
-                    _ocStatus = "未配置 API Key：已按词典预填完成 ✓";
+                    _ocStatus = "未配置 API Key：已按词典预填完成 ";
                     _ocGuidePending = true;
                     _result = log +
                               $"\n把翻译目录里的 {Path.GetFileName(outputs[0])} 等文件交给外部 AI（连同 翻译规则.json），" +
@@ -1015,13 +1015,13 @@ public class MainWindow : Window, IDisposable
                     return;
                 }
 
-                // ④ 汇总 + 重载词典 → ⑤ 写回
+                // ④ 汇总 + 重载词典 -> ⑤ 写回
                 _ocStatus = "④ 汇总已翻译内容…";
                 SumupCore(transDir, log);
                 _ocStatus = "⑤ 翻译写入MOD…";
                 plugin.Import.ApplyDictionary(modRoot, plugin.Dict, mods);
                 log.Append('\n').Append(plugin.Import.LastResult);
-                _ocStatus = "完成 ✓";
+                _ocStatus = "完成 ";
                 _result = log.ToString();
             }
             catch (Exception ex)
@@ -1068,7 +1068,7 @@ public class MainWindow : Window, IDisposable
                 plugin.AppLog.Info("[全自动] 没有未翻译模组，无需处理");
                 return;
             }
-            plugin.AppLog.Info($"[全自动] 开始：{mods.Count} 个未翻译模组（提取→预填→AI→汇总→写回）");
+            plugin.AppLog.Info($"[全自动] 开始：{mods.Count} 个未翻译模组（提取->预填->AI->汇总->写回）");
             _ocSummary = true; // 全自动默认汇总提取（同原文跨模组天然去重友好）
             StartOneClick(mods);
         }
@@ -1122,7 +1122,7 @@ public class MainWindow : Window, IDisposable
 
     /// <summary>
     /// 未选中模组时的「一键汉化（伪）」：对当前列表（默认即全部未翻译模组）执行
-    /// ①提取 → ②词典预填 → ③AI翻译（无Key降级）→ ④汇总 → ⑤写入。
+    /// ①提取 -> ②词典预填 -> ③AI翻译（无Key降级）-> ④汇总 -> ⑤写入。
     /// 称“伪”是因为走外部 AI 时中途需要人工把文件送去翻译再放回。
     /// </summary>
     private void DrawOneClickAll()
@@ -1138,7 +1138,7 @@ public class MainWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("插件启动约 10 秒后自动扫一遍未翻译模组并跑完整流程（提取→词典预填→AI→汇总→写回）。\n" +
+            ImGui.SetTooltip("插件启动约 10 秒后自动扫一遍未翻译模组并跑完整流程（提取->词典预填->AI->汇总->写回）。\n" +
                              "需已在「AI 设置」配好 Key；未配 Key 时静默跳过，不打扰。");
         }
         Ui.SameLineIfFits(Ui.ButtonWidth("新模组自动汉化") + ImGui.GetFrameHeight());
@@ -1178,7 +1178,7 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("停止：不再发送新批次，正在请求中的那批也会被立即中断。\n" +
-                                 "⚠ 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
+                                 "[!] 已翻完的批次会保留并写盘（那部分额度已消耗，不浪费）。");
             }
             if (_ocStopRequested)
             {
@@ -1197,7 +1197,7 @@ public class MainWindow : Window, IDisposable
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip("对当前列表（默认即全部未翻译模组）自动完成：提取 → 词典预填 → AI 翻译（已配 Key 时）→ 汇总 → 写回并重载。\n" +
+                ImGui.SetTooltip("对当前列表（默认即全部未翻译模组）自动完成：提取 -> 词典预填 -> AI 翻译（已配 Key 时）-> 汇总 -> 写回并重载。\n" +
                                  "称「伪」：未配 Key 时会停在词典预填，需要人工把 _未翻译.json 交给外部 AI、翻好放回后点「汇总并写入」。");
             }
             Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
@@ -1275,8 +1275,8 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// 从剪贴板导入译文：解析 AI 回复的 JSON（容忍 ``` 包裹）→ 写成 _已翻译.json，
-    /// 随后点「汇总并写入」即可完成写回。闭合「复制提示词 → 对话式 AI → 导入」的外链路线。
+    /// 从剪贴板导入译文：解析 AI 回复的 JSON（容忍 ``` 包裹）-> 写成 _已翻译.json，
+    /// 随后点「汇总并写入」即可完成写回。闭合「复制提示词 -> 对话式 AI -> 导入」的外链路线。
     /// </summary>
     private void ImportFromClipboard()
     {
@@ -1331,7 +1331,7 @@ public class MainWindow : Window, IDisposable
             if (root["翻译规则"] == null)
                 root["翻译规则"] = ExtractService.BuildTranslationRules(plugin.Configuration.DictionaryPath);
             File.WriteAllText(outPath, root.ToJsonString(JsonFile.Indented), Encoding.UTF8);
-            _result = $"已从剪贴板导入 {count} 项译文 → {outName}\n接着点「汇总并写入」即可写回模组。";
+            _result = $"已从剪贴板导入 {count} 项译文 -> {outName}\n接着点「汇总并写入」即可写回模组。";
         }
         catch (Exception ex)
         {
@@ -1438,7 +1438,7 @@ public class MainWindow : Window, IDisposable
                 }
                 plugin.Penumbra.Reload(mod.Directory, mod.Name);
                 plugin.AppLog.Info($"[重新下载] {mod.Name}：{msg}");
-                _restoreStatus = msg + " ✓";
+                _restoreStatus = msg + " ";
                 _result = msg;
             }
             catch (Exception ex)
@@ -1536,7 +1536,7 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    /// <summary> 保存详情区编辑：备份（zip）→ 写回输入框内容 → 重读文件 → 触发 Penumbra 重载。 </summary>
+    /// <summary> 保存详情区编辑：备份（zip）-> 写回输入框内容 -> 重读文件 -> 触发 Penumbra 重载。 </summary>
     internal void SaveEdits(ModFileInfo file, ModEntry mod, Dictionary<string,string> bufs)
     {
         try

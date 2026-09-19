@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 
 namespace FFXIVPenumbraHanhua.Services;
 
-/// <summary> 提取英文：扫描模组选项/描述 → 生成翻译目录\全部模组_未翻译.json（供外部 AI 翻译）。 </summary>
+/// <summary> 提取英文：扫描模组选项/描述 -> 生成翻译目录\全部模组_未翻译.json（供外部 AI 翻译）。 </summary>
 public sealed class ExtractService
 {
     private readonly DictionaryService _dict;
@@ -201,7 +201,7 @@ public sealed class ExtractService
         _lastOutputPaths.Add(outPath);
 
         var sb2 = new StringBuilder();
-        sb2.Append($"提取完成：{total} 项（{mods.Count - skippedMarked - noFiles} 个模组）→ {outPath}");
+        sb2.Append($"提取完成：{total} 项（{mods.Count - skippedMarked - noFiles} 个模组）-> {outPath}");
         if (skippedMarked > 0) sb2.Append($"；跳过 {skippedMarked} 个已标记「已翻译」的模组");
         if (noFiles > 0) sb2.Append($"；{noFiles} 个模组无 group 文件");
         LastResult = sb2.ToString();

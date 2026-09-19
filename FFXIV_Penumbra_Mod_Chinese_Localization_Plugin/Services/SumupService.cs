@@ -88,7 +88,7 @@ public sealed class SumupService
             return -1;
         }
 
-        LastResult = $"汇总已翻译内容完成：新增 {written} 条 → 我的翻译.json（已有译文未覆盖）";
+        LastResult = $"汇总已翻译内容完成：新增 {written} 条 -> 我的翻译.json（已有译文未覆盖）";
         _log.Info(LastResult);
         return written;
     }
@@ -137,7 +137,7 @@ public sealed class SumupService
             LastResult = "写入 我的翻译.json 失败：" + saveErr;
             return -1;
         }
-        LastResult = $"已自动沉淀 {written} 条 → 我的翻译.json";
+        LastResult = $"已自动沉淀 {written} 条 -> 我的翻译.json";
         _log.Info(LastResult);
         return written;
     }

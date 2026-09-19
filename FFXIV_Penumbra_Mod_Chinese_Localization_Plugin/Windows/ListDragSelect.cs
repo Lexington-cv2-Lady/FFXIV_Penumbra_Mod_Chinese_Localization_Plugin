@@ -56,7 +56,7 @@ internal sealed class ListDragSelect
             _start = mouse;
         }
 
-        // 按住并移动超过阈值 → 进入框选（区分纯点击）
+        // 按住并移动超过阈值 -> 进入框选（区分纯点击）
         if (_armed && io.MouseDown[0] && !_dragging &&
             Vector2.Distance(mouse, _start) > io.MouseDragThreshold)
         {

@@ -38,7 +38,7 @@ public class AiSettingsWindow : Window, IDisposable
     {
         var cfg = _plugin.Configuration;
 
-        ImGui.TextWrapped("配置 OpenAI 兼容接口（智谱 / 通义 / 混元 / 千帆 / OpenRouter / GPT 等），用于「翻译管线 → AI 翻译」。");
+        ImGui.TextWrapped("配置 OpenAI 兼容接口（智谱 / 通义 / 混元 / 千帆 / OpenRouter / GPT 等），用于「翻译管线 -> AI 翻译」。");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -100,7 +100,7 @@ public class AiSettingsWindow : Window, IDisposable
         ImGui.Spacing();
 
         // BaseUrl
-        ImGui.TextUnformatted("API 地址（留空 = 服务商预设）：");
+        ImGui.TextUnformatted("API 地址（留空即服务商预设）：");
         var baseUrl = cfg.AiBaseUrl;
         var pasteW = 64f * ImGuiHelpers.GlobalScale;
         ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - pasteW - 8f * ImGuiHelpers.GlobalScale));
@@ -173,14 +173,14 @@ public class AiSettingsWindow : Window, IDisposable
         }
         if (string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg)))
         {
-            Ui.ColoredWrapped(new Vector4(1f, 0.5f, 0.2f, 1f), "未填写 Key：AI 翻译不可用，可改用外部 AI 翻译（导出 _未翻译.json → 外部翻译 → ④ 汇总 → ⑤ 写回）。");
-            Ui.Hint("免费 AI 路线：在「半自动汉化流程」① 导出 _未翻译.json（连同 翻译规则.json）交给外部 AI，翻好改名为 _已翻译.json 放回翻译目录，再点 ④ 汇总 → ⑤ 翻译写入MOD。");
+            Ui.ColoredWrapped(new Vector4(1f, 0.5f, 0.2f, 1f), "未填写 Key：AI 翻译不可用，可改用外部 AI 翻译（导出 _未翻译.json -> 外部翻译 -> ④ 汇总 -> ⑤ 写回）。");
+            Ui.Hint("免费 AI 路线：在「半自动汉化流程」① 导出 _未翻译.json（连同 翻译规则.json）交给外部 AI，翻好改名为 _已翻译.json 放回翻译目录，再点 ④ 汇总 -> ⑤ 翻译写入MOD。");
         }
 
         ImGui.Spacing();
 
         // 模型
-        ImGui.TextUnformatted("模型（留空 = 供应商预设）：");
+        ImGui.TextUnformatted("模型（留空即供应商预设）：");
         var model = cfg.AiModel;
         ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - pasteW - 8f * ImGuiHelpers.GlobalScale));
         if (ImGui.InputText("##AiModel", ref model, 256))

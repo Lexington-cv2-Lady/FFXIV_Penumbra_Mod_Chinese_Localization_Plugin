@@ -410,7 +410,7 @@ public sealed class WikiExportService
         return false;
     }
 
-    /// <summary> 分类显示名 → 中文文件名（「物品（Item）」→「物品」，清洗非法字符）。 </summary>
+    /// <summary> 分类显示名 -> 中文文件名（「物品（Item）」->「物品」，清洗非法字符）。 </summary>
     private static string CategoryFileNameZh(string display)
     {
         var p = display.IndexOf('（');

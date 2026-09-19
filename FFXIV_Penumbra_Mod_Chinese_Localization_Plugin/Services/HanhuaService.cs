@@ -6,7 +6,7 @@ using System.Text;
 
 namespace FFXIVPenumbraHanhua.Services;
 
-/// <summary> 汉化闭环：读模组文件 → 词典翻译 → 备份 → 写回 → Penumbra 重载。 </summary>
+/// <summary> 汉化闭环：读模组文件 -> 词典翻译 -> 备份 -> 写回 -> Penumbra 重载。 </summary>
 public sealed class HanhuaService
 {
     private readonly PenumbraService _penumbra;
@@ -161,7 +161,7 @@ public sealed class HanhuaService
 
     /// <summary>
     /// 翻译单个条目（支持覆写）：
-    /// - 已是中文：先用英文快照找回原文 → 以英文 key 重新查词典（词典更新后覆盖旧译法）；
+    /// - 已是中文：先用英文快照找回原文 -> 以英文 key 重新查词典（词典更新后覆盖旧译法）；
     ///   快照缺失或未命中新译文时回退为现有剥壳处理。
     /// - 纯英文：走现有翻译管线。
     /// </summary>
@@ -172,14 +172,14 @@ public sealed class HanhuaService
         if (!dict.ContainsChinese(current))
             return Translator.Translate(current, modKey, dict);
 
-        // 已是中文 → 尝试覆写
+        // 已是中文 -> 尝试覆写
         var en = FindEnglish(snapInfo, gIndex, oIndex, kind);
         if (!string.IsNullOrEmpty(en) && en != current)
         {
             var enKey = $"{file.FileName}||{KindTag(kind)}||{en}";
             var newZh = Translator.Translate(en, enKey, dict);
             if (newZh.Length > 0 && newZh != en && newZh != current)
-                return newZh; // 词典有新译文 → 覆盖
+                return newZh; // 词典有新译文 -> 覆盖
         }
 
         // 回退：现有剥壳处理（双语规范化 / 黑名单还原等）

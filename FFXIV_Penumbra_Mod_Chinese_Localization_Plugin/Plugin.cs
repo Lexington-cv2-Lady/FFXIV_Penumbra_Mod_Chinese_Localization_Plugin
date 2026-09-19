@@ -241,7 +241,7 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    /// <summary> 目录变更后自动迁移：翻译目录 → 翻译 json；词典目录 → .英文快照 / wiki / AI知识库 文件夹与词典 json。目标已存在不覆盖。 </summary>
+    /// <summary> 目录变更后自动迁移：翻译目录 -> 翻译 json；词典目录 -> .英文快照 / wiki / AI知识库 文件夹与词典 json。目标已存在不覆盖。 </summary>
     public void MigrateDirectories()
     {
         // 词典目录变更：迁移 .英文快照、wiki/AI知识库 文件夹与词典 json
@@ -259,7 +259,7 @@ public sealed class Plugin : IDalamudPlugin
                 if (TryMoveFile(oldD, newD, "我的翻译.json")) moved++;
                 if (TryMoveFile(oldD, newD, "个性翻译.json")) moved++;
                 if (TryMoveFile(oldD, newD, "内置wiki_术语对照.json")) moved++;
-                AppLog.Info($"[配置] 词典目录变更：迁移 {moved} 项 → {newD}");
+                AppLog.Info($"[配置] 词典目录变更：迁移 {moved} 项 -> {newD}");
             }
         }
 
@@ -277,7 +277,7 @@ public sealed class Plugin : IDalamudPlugin
                     if (!Directory.Exists(dst))
                     {
                         Directory.Move(legacy, dst);
-                        AppLog.Info($"[配置] 翻译目录变更：旧 .英文快照 已迁往词典目录 → {dst}");
+                        AppLog.Info($"[配置] 翻译目录变更：旧 .英文快照 已迁往词典目录 -> {dst}");
                     }
                     else
                     {

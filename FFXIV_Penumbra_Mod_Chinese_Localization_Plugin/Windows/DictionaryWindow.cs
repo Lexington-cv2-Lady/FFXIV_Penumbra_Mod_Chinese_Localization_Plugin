@@ -92,7 +92,7 @@ public class DictionaryWindow : Window, IDisposable
         if (_saveMsg.Length > 0)
         {
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0.55f, 0.9f, 0.55f, 1f), "✓ " + _saveMsg);
+            ImGui.TextColored(new Vector4(0.55f, 0.9f, 0.55f, 1f), "" + _saveMsg);
         }
         if (_openMsg.Length > 0)
         {

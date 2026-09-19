@@ -16,7 +16,7 @@ namespace FFXIVPenumbraHanhua.Services;
 /// 模组还原服务：把被翻译改坏的组/选项文本恢复为原始状态。
 /// ① HS 模组（有 heliosphere.json）：走 Heliosphere GraphQL 拿英文选项树还原；
 /// ② 手动安装模组：从 手动安装 目录匹配原始 PMP，还原其自带文本。
-/// ⚠ HS 下载协议依赖服务端，若其改版需按官方源码（git.sharlayan.cloud/heliosphere/plugin，queries/ 目录）更新查询。
+/// [!] HS 下载协议依赖服务端，若其改版需按官方源码（git.sharlayan.cloud/heliosphere/plugin，queries/ 目录）更新查询。
 /// </summary>
 public sealed class ModRestoreService
 {

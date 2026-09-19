@@ -6,9 +6,9 @@ namespace FFXIVPenumbraHanhua.Services;
 
 /// <summary>
 /// 翻译管线（与独立版语义一致）：
-/// 1) 已是中文 → 剥壳为纯中文（黑名单词整段还原英文）
+/// 1) 已是中文 -> 剥壳为纯中文（黑名单词整段还原英文）
 /// 2) 整条查词典（mods 层 key / terms 层）
-/// 3) 整条未命中 → 按 " - " 拆词块逐块查词典，黑名单词保留英文
+/// 3) 整条未命中 -> 按 " - " 拆词块逐块查词典，黑名单词保留英文
 /// 输出恒为纯中文（黑名单专名除外）。
 /// </summary>
 public static class Translator
@@ -62,7 +62,7 @@ public static class Translator
             if (t.Length > 0 && !dict.IsBlacklisted(t))
             {
                 zh = dict.LookupTerm(t) ?? "";
-                // 块内词边界最长子串替换（如 "White lace" 无整条 → 拆词）
+                // 块内词边界最长子串替换（如 "White lace" 无整条 -> 拆词）
                 if (zh.Length == 0 && t.Length > 1)
                 {
                     zh = TranslateSubstring(t, dict);

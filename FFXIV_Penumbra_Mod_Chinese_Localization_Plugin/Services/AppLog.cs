@@ -91,7 +91,7 @@ public sealed class AppLog
         _ => "信息"
     };
 
-    /// <summary> 快照（新→旧）。 </summary>
+    /// <summary> 快照（新->旧）。 </summary>
     public IReadOnlyList<Entry> Snapshot()
     {
         lock (_lock)

@@ -28,7 +28,7 @@ public sealed class PenumbraService : IDisposable
     /// <summary> Penumbra 已卸载/失效。 </summary>
     public event Action? PenumbraDisposed;
 
-    /// <summary> 当前已加载的模组快照（目录名 → 显示名）。 </summary>
+    /// <summary> 当前已加载的模组快照（目录名 -> 显示名）。 </summary>
     public IReadOnlyList<ModEntry> Mods { get; private set; } = [];
 
     /// <summary> 最近一次获取模组列表的结果描述（供界面显示）。 </summary>

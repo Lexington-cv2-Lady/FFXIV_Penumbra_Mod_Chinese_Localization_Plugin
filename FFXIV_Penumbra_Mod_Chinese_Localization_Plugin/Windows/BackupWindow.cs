@@ -168,7 +168,7 @@ public class BackupWindow : Window, IDisposable
                             var checkedItem = _modSet.Contains(mods[i].Directory);
                             var marked = _mark.HasMark(mods[i].Directory);
                             var rowTop = ImGui.GetCursorScreenPos().Y;
-                            // 紧凑行：小内边距 → 勾选框更小、行更矮，窗口缩小时一屏可见更多选项
+                            // 紧凑行：小内边距 -> 勾选框更小、行更矮，窗口缩小时一屏可见更多选项
                             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(3f, 2f) * ImGuiHelpers.GlobalScale);
                             if (ImGui.Checkbox($"##m{i}", ref checkedItem) && modInteractive)
                             {
@@ -192,7 +192,7 @@ public class BackupWindow : Window, IDisposable
                                 ImGui.SetTooltip(mods[i].Directory + "\n点击整行切换勾选；按住左键拖动可框选多个");
                             }
                         }
-                        // 框选命中 → 勾选（只增不减），并联动备份列表
+                        // 框选命中 -> 勾选（只增不减），并联动备份列表
                         var hitMods = _modDrag.End();
                         if (hitMods.Count > 0)
                         {
@@ -237,7 +237,7 @@ public class BackupWindow : Window, IDisposable
         var selectedMods = _modSet;
         var relevant = allBackups.Where(b => selectedMods.Count == 0 || selectedMods.Contains(b.ModDir)).ToList();
 
-        // 模组勾选变化 → 自动全选其备份（用户仍可手动取消个别备份）
+        // 模组勾选变化 -> 自动全选其备份（用户仍可手动取消个别备份）
         if (_syncBak)
         {
             _syncBak = false;
@@ -278,7 +278,7 @@ public class BackupWindow : Window, IDisposable
                             var b = relevant[i];
                             var checkedItem = _bakSet.Contains(b.BakPath);
                             var rowTop = ImGui.GetCursorScreenPos().Y;
-                            // 紧凑行：小内边距 → 勾选框更小、行更矮
+                            // 紧凑行：小内边距 -> 勾选框更小、行更矮
                             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(3f, 2f) * ImGuiHelpers.GlobalScale);
                             if (ImGui.Checkbox($"##b{i}", ref checkedItem) && bakInteractive)
                             {
@@ -299,7 +299,7 @@ public class BackupWindow : Window, IDisposable
                                 ImGui.SetTooltip($"备份时间：{b.Time:yyyy-MM-dd HH:mm:ss}\n完整路径：{b.BakPath}\n点击整行切换勾选；按住左键拖动可框选多个");
                             }
                         }
-                        // 框选命中 → 勾选（只增不减）
+                        // 框选命中 -> 勾选（只增不减）
                         foreach (var i in _bakDrag.End()) _bakSet.Add(relevant[i].BakPath);
                     }
                 }
@@ -354,7 +354,7 @@ public class BackupWindow : Window, IDisposable
         }
 
         // 右：还原选中备份（贴右缘；窄窗口时不与中钮重叠）
-        // 覆盖模组文件的重操作 → 二次确认：首次点击变「再点一次确认」，3 秒内再点才执行
+        // 覆盖模组文件的重操作 -> 二次确认：首次点击变「再点一次确认」，3 秒内再点才执行
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rowW - resW));
         var armed = _restoreArmed && DateTime.Now < _restoreArmedUntil;
@@ -370,7 +370,7 @@ public class BackupWindow : Window, IDisposable
                 _restoreArmedUntil = DateTime.Now.AddSeconds(3);
                 _result = _bakSet.Count == 0
                     ? "未勾选备份（右侧勾选要还原的备份）"
-                    : $"⚠ 将要还原 {_bakSet.Count} 个备份并覆盖模组文件，3 秒内再点一次确认";
+                    : $"[!] 将要还原 {_bakSet.Count} 个备份并覆盖模组文件，3 秒内再点一次确认";
             }
             else
             {

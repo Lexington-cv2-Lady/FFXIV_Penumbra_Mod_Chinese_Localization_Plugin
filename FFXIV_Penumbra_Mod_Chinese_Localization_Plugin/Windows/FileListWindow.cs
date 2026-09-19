@@ -91,11 +91,11 @@ public class FileListWindow : Window, IDisposable
 
         if (q.Length == 0)
         {
-            Ui.Hint($"文件 {files.Count} 个 / 选项组 {totalGroups} 个 / 选项 {totalOptions} 项　（绿色=已中文，橙色=未翻译；描述悬停可看）");
+            Ui.Hint($"文件 {files.Count} 个 / 选项组 {totalGroups} 个 / 选项 {totalOptions} 项　（绿色即已中文，橙色即未翻译；描述悬停可看）");
         }
         else
         {
-            Ui.Hint($"搜索「{q}」：命中 {display.Count} / {files.Count} 个文件　（绿色=已中文，橙色=未翻译；描述悬停可看）");
+            Ui.Hint($"搜索「{q}」：命中 {display.Count} / {files.Count} 个文件　（绿色即已中文，橙色即未翻译；描述悬停可看）");
         }
         ImGui.Spacing();
         ImGui.Separator();

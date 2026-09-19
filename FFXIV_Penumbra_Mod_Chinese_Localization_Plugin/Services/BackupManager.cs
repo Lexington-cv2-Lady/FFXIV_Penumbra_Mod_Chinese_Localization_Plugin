@@ -36,7 +36,7 @@ public sealed class BackupManager
         _mark = mark;
     }
 
-    /// <summary> 扫描模组根目录下所有备份，按时间新→旧。识别：.json.bak_yyyyMMdd_HHmmss 与 yyyy-MM-dd_HH-mm-ss备份.zip。 </summary>
+    /// <summary> 扫描模组根目录下所有备份，按时间新->旧。识别：.json.bak_yyyyMMdd_HHmmss 与 yyyy-MM-dd_HH-mm-ss备份.zip。 </summary>
     public List<BackupInfo> ListBackups(string modRoot)
     {
         var list = new List<BackupInfo>();

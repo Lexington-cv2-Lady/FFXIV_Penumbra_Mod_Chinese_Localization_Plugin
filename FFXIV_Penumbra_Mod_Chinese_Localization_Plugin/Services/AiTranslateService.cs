@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 
 namespace FFXIVPenumbraHanhua.Services;
 
-/// <summary> AI 翻译：OpenAI 兼容 /chat/completions 接口，翻译「_未翻译.json」→「_已翻译.json」。 </summary>
+/// <summary> AI 翻译：OpenAI 兼容 /chat/completions 接口，翻译「_未翻译.json」->「_已翻译.json」。 </summary>
 public sealed class AiTranslateService
 {
     private readonly AppLog _log;
@@ -24,7 +24,7 @@ public sealed class AiTranslateService
     private static HttpClient Http = new();
     private static readonly object HttpLock = new();
 
-    /// <summary> 按配置应用代理（未启用或地址为空 → 恢复系统默认代理行为）。 </summary>
+    /// <summary> 按配置应用代理（未启用或地址为空 -> 恢复系统默认代理行为）。 </summary>
     public static void ApplyProxyConfig(Configuration cfg)
     {
         var useProxy = cfg.UseProxy && !string.IsNullOrWhiteSpace(cfg.ProxyAddress);
@@ -156,7 +156,7 @@ public sealed class AiTranslateService
     }
 
     /// <summary> 单请求输出上限 max_tokens（按平台自动；未知平台沿用旧值避免 400）。
-    /// ⚠ 取值原则：**宁可偏大不可偏小**——过大只是偶发 400（有自愈可自动纠正），
+    /// [!] 取值原则：**宁可偏大不可偏小**——过大只是偶发 400（有自愈可自动纠正），
     /// 过小会把译文输出**截断**导致整批 JSON 解析失败（且不报 400、不触发自愈）。
     /// 须与 <see cref="MaxBatchChars"/> 的输入上限匹配（中文输出 token ≈ 字符数）。 </summary>
     public static long MaxTokensForModel(Configuration cfg)
@@ -175,8 +175,8 @@ public sealed class AiTranslateService
     }
 
     /// <summary> 单批输入内容字符上限（按平台自动，防止超长被拒；条数上限同时生效）。
-    /// ⚠ 必须与 <see cref="MaxTokensForModel"/> 的输出上限匹配：中文译文输出 token 数 ≈ 输入字符数，
-    /// 输入上限超过输出上限时译文会被截断 → 整批 JSON 解析失败。 </summary>
+    /// [!] 必须与 <see cref="MaxTokensForModel"/> 的输出上限匹配：中文译文输出 token 数 ≈ 输入字符数，
+    /// 输入上限超过输出上限时译文会被截断 -> 整批 JSON 解析失败。 </summary>
     public static int MaxBatchChars(Configuration cfg)
     {
         var (epUrl, epModel) = ResolveEndpoint(cfg);
@@ -292,7 +292,7 @@ public sealed class AiTranslateService
         }
     }
 
-    /// <summary> 翻译未翻译文件。inputPath → outputPath。返回翻译成功的条目数。 </summary>
+    /// <summary> 翻译未翻译文件。inputPath -> outputPath。返回翻译成功的条目数。 </summary>
     public async Task<int> TranslateAsync(string inputPath, string outputPath, Configuration cfg, CancellationToken ct = default)
     {
         var apiKey = GetApiKey(cfg);
@@ -353,7 +353,7 @@ public sealed class AiTranslateService
         }
         var uniqueOrigins = origToKeys.Keys.ToList();
         if (pending.Count - uniqueOrigins.Count > 0)
-            _log.Info($"AI 翻译：跨项去重 {pending.Count} 项 → {uniqueOrigins.Count} 个唯一原文（同原文只送一次）");
+            _log.Info($"AI 翻译：跨项去重 {pending.Count} 项 -> {uniqueOrigins.Count} 个唯一原文（同原文只送一次）");
 
         // 规则段
         var rules = root["翻译规则"] as JsonObject ?? ExtractService.BuildTranslationRules(cfg.DictionaryPath);
@@ -406,7 +406,7 @@ public sealed class AiTranslateService
             try
             {
                 _log.Info($"AI 翻译：{Path.GetFileName(inputPath)} 批次 {bi + 1}/{batches.Count}（{batch.Count} 项，当前：{KeySummary(batch[0])}）");
-                // 带 max_tokens 自愈的请求（平台上限写错时：解析其自报上限 → 记住 → 以正确值重试本批一次）
+                // 带 max_tokens 自愈的请求（平台上限写错时：解析其自报上限 -> 记住 -> 以正确值重试本批一次）
                 var (reqOk, text, reqErr) = await SendBatchWithSelfHealAsync(
                     baseUrl, apiKey, model, sysMsg, batchObj, cfg, ct);
                 if (!reqOk)
@@ -445,7 +445,7 @@ public sealed class AiTranslateService
                         var orig = it.TryGetPropertyValue("原文", out var okNode) ? okNode?.ToString() ?? "" : "";
                         var zh = it.TryGetPropertyValue("译文", out var zhNode) ? zhNode?.ToString() ?? "" : "";
                         if (string.IsNullOrEmpty(orig) || string.IsNullOrEmpty(zh)) continue;
-                        // 原文→译文：回填到该原文对应的所有完整 key（options/descriptions 两层）
+                        // 原文->译文：回填到该原文对应的所有完整 key（options/descriptions 两层）
                         if (!origToKeys.TryGetValue(orig, out var keys)) continue;
                         foreach (var fullKey in keys)
                         {
@@ -492,7 +492,7 @@ public sealed class AiTranslateService
 
         var sb = new StringBuilder();
         var cancelled = ct.IsCancellationRequested;
-        sb.Append($"AI 翻译{(cancelled ? "已取消" : "完成")}：命中 {ok}/{pending.Count} 项 → {outputPath}");
+        sb.Append($"AI 翻译{(cancelled ? "已取消" : "完成")}：命中 {ok}/{pending.Count} 项 -> {outputPath}");
         if (errors.Count > 0)
             sb.Append("；问题：" + string.Join("；", errors.Take(3)) + (errors.Count > 3 ? $" 等 {errors.Count} 条" : ""));
         LastResult = sb.ToString();
@@ -555,7 +555,7 @@ public sealed class AiTranslateService
             var content = await resp.Content.ReadAsStringAsync(ct);
             if (resp.IsSuccessStatusCode) return (true, ExtractContent(content), null);
 
-            // 自愈：400 且提到 max_tokens → 学上限、以正确值重试本批
+            // 自愈：400 且提到 max_tokens -> 学上限、以正确值重试本批
             if (attempt == 0 && (int)resp.StatusCode == 400 &&
                 content.Contains("max_tokens", StringComparison.OrdinalIgnoreCase))
             {
@@ -568,8 +568,8 @@ public sealed class AiTranslateService
                     continue;
                 }
             }
-            // 模型名类错误（模型不存在/已下线）：平台模型名变化快，预设名可能过时 → 明确引导用户自行改
-            // ⚠ 必须同时认英文与中文提示：实测智谱返回中文「模型不存在，请检查模型代码。」（不含 "model" 字样）
+            // 模型名类错误（模型不存在/已下线）：平台模型名变化快，预设名可能过时 -> 明确引导用户自行改
+            // [!] 必须同时认英文与中文提示：实测智谱返回中文「模型不存在，请检查模型代码。」（不含 "model" 字样）
             var lowered = content.ToLowerInvariant();
             var modelErr =
                 (lowered.Contains("model") && (lowered.Contains("not found") || lowered.Contains("not exist")
@@ -605,7 +605,7 @@ public sealed class AiTranslateService
 
     /// <summary>
     /// 从平台报错里解析其允许的 max_tokens 上限，如智谱返回
-    /// <c>max_tokens参数非法：限制数值范围[1,16384]</c> → 16384。
+    /// <c>max_tokens参数非法：限制数值范围[1,16384]</c> -> 16384。
     /// 目的是**自愈**：任何平台上限写错，最多浪费一次请求即可自动纠正。
     /// </summary>
     private static long ParseMaxTokensCap(string errorBody)

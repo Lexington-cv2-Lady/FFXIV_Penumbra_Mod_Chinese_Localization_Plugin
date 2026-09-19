@@ -14,7 +14,7 @@ using FFXIVPenumbraHanhua.Services;
 
 namespace FFXIVPenumbraHanhua.Windows;
 
-/// <summary> 日志窗口：环形操作日志（新→旧）占主区，底部固定一条「最近报错」，顶部可打开日志文件；
+/// <summary> 日志窗口：环形操作日志（新->旧）占主区，底部固定一条「最近报错」，顶部可打开日志文件；
 /// 支持一键导出「报错日志」zip（汉化日志.log + dalamud.log），导出目录默认插件数据目录、可修改。 </summary>
 public class LogWindow : Window, IDisposable
 {
@@ -133,7 +133,7 @@ public class LogWindow : Window, IDisposable
                 }
                 if (_autoScroll && entries.Count > 0)
                 {
-                    ImGui.SetScrollY(0f); // 列表新→旧：顶部即最新一条
+                    ImGui.SetScrollY(0f); // 列表新->旧：顶部即最新一条
                 }
             }
         }
@@ -161,7 +161,7 @@ public class LogWindow : Window, IDisposable
         _fileDialog.Draw();
     }
 
-    /// <summary> 导出报错日志：汉化日志.log + dalamud.log → 报错日志_时间戳.zip。 </summary>
+    /// <summary> 导出报错日志：汉化日志.log + dalamud.log -> 报错日志_时间戳.zip。 </summary>
     private void ExportLogs()
     {
         try
@@ -203,7 +203,7 @@ public class LogWindow : Window, IDisposable
                     zip.CreateEntryFromFile(src, arcName);
                 }
             }
-            _exportMsg = $"已导出 {files.Count} 个日志 → {zipPath}";
+            _exportMsg = $"已导出 {files.Count} 个日志 -> {zipPath}";
         }
         catch (Exception ex)
         {

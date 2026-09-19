@@ -43,7 +43,7 @@ public sealed class ImportService
         var totalWritten = 0;
         var totalBackups = 0;
         var errors = new List<string>();
-        var reloaded = new Dictionary<string, string>();  // 目录 → 显示名（ReloadMod 需按二元组匹配）
+        var reloaded = new Dictionary<string, string>();  // 目录 -> 显示名（ReloadMod 需按二元组匹配）
         var completed = new Dictionary<string, string>(); // 本次有写入或已无待翻译内容的模组（用于建「已翻译」标记）
         var modBackedUp = new HashSet<string>();
 
@@ -151,7 +151,7 @@ public sealed class ImportService
                 }
             }
             if (wroteAny) reloaded[mod.Directory] = mod.Name;
-            // 有写入 或（有内容且已全部译好）→ 视为已完成汉化，建标记
+            // 有写入 或（有内容且已全部译好）-> 视为已完成汉化，建标记
             if (wroteAny || (anyContent && allDone)) completed[mod.Directory] = mod.Name;
         }
 
@@ -207,7 +207,7 @@ public sealed class ImportService
         return g?.Options.FirstOrDefault(x => x.Index == oIndex)?.Name;
     }
 
-    /// <summary> 查词典译文：原文为空 / 已含中文（不重复覆盖）/ 黑名单 → 不写回。mods 层精确键优先，再 terms 层。 </summary>
+    /// <summary> 查词典译文：原文为空 / 已含中文（不重复覆盖）/ 黑名单 -> 不写回。mods 层精确键优先，再 terms 层。 </summary>
     private static string? ApplyLookup(DictionaryService dict, string fileName, string field, string english)
     {
         if (string.IsNullOrWhiteSpace(english)) return null;

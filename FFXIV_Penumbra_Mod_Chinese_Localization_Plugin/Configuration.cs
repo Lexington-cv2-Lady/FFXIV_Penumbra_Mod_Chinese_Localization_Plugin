@@ -22,7 +22,7 @@ public class Configuration : IPluginConfiguration
     public int BackupCount { get; set; } = 5;
 
     // ── 全自动汉化（默认关：需用户显式开启；运行中静默，进度在主窗口状态栏）──
-    /// <summary> 插件启动后 ~10 秒自动扫一遍未翻译模组并跑全自动汉化（提取→词典预填→AI→汇总→写回；需已配 API Key，未配则静默跳过）。 </summary>
+    /// <summary> 插件启动后 ~10 秒自动扫一遍未翻译模组并跑全自动汉化（提取->词典预填->AI->汇总->写回；需已配 API Key，未配则静默跳过）。 </summary>
     public bool AutoHanhuaOnStart { get; set; }
 
     /// <summary> Penumbra 新模组加入后自动跑全自动汉化（需已配 API Key；未配则静默跳过）。 </summary>

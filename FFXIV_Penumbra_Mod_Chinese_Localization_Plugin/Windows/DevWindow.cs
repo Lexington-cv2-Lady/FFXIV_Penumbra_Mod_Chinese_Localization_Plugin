@@ -37,7 +37,7 @@ public class DevWindow : Window, IDisposable
             cfg.Save();
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("还原备份后，立即自动重跑未翻译模组的完整汉化流程。\n相当于「还原=重置，自动补回译文」。默认关。");
+            ImGui.SetTooltip("还原备份后，立即自动重跑未翻译模组的完整汉化流程。\n相当于「还原即重置，自动补回译文」。默认关。");
 
         ImGui.Separator();
         ImGui.TextDisabled("调试按钮（正常使用自动完成）");
