@@ -43,7 +43,7 @@ https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_
 <details>
 <summary><b>手动安装（不通过自定义仓库）</b></summary>
 
-1. 从 [Releases](https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases) 下载 `FFXIV-Penumbra-Mod-Localization.zip`
+1. 从 [Releases](https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/releases) 下载最新版 zip（见 Releases 页面）
 2. 解压到 `XIVLauncherCN\plugins\FFXIV_Penumbra_Mod_Chinese_Localization_Plugin\`
 3. 重启游戏或重新加载卫月
 
@@ -63,7 +63,7 @@ https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_
 ## 🚀 使用
 
 - **打开主窗口**：聊天框输入 **`/pmh`**，或通过插件安装器点击齿轮图标。
-- **汉化流程**：① 提取英文 → ② 预翻译 → ③ AI 翻译 → ④ 汇总已翻译内容 → ⑤ 翻译写入MOD
+- **汉化流程**：① AI 设置（配 Key）→ ② 主动扫描英文 → ③ 词典预填 → ④ AI 翻译 → ⑤ 汇总写回
 - 主窗口可对单个模组「翻译并写入」、手动编辑中英文并保存、创建/删除「已翻译」标记、查漏补缺。
 
 ## 📂 数据目录
@@ -76,6 +76,10 @@ https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_
 
 > 安装即用：两个目录首次启动时自动创建，无需手动设置；后续可在「目录和词典管理」中修改（自动迁移已有数据）。
 
+## 📄 协议
+
+本项目采用 **AGPL-3.0** 开源协议——你可以自由使用、修改和分发，但修改后的作品必须同样以 AGPL-3.0 开源。
+
 ## 🛠 构建与打包
 
 ```powershell
@@ -83,4 +87,4 @@ $env:DALAMUD_HOME = "$env:APPDATA\XIVLauncherCN\addon\Hooks\dev"
 dotnet build "FFXIV_Penumbra_Mod_Chinese_Localization_Plugin\FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.csproj" -c Debug
 ```
 
-打包：`dotnet build -c Release` 会由 DalamudPackager 在 `bin\Release\<插件ID>\latest.zip` 生成符合卫月规范的发布包。
+打包：`dotnet build -c Release` 生成 dll + manifest，手动打 zip（dll + json + images/icon.png）传到 Releases。
