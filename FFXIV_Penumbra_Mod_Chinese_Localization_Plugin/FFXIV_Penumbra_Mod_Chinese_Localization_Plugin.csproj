@@ -39,7 +39,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Penumbra.Api" Version="5.19.0" />
+    <PackageReference Include="Penumbra.Api" Version="5.19.1" />
   </ItemGroup>
 
   <ItemGroup>
