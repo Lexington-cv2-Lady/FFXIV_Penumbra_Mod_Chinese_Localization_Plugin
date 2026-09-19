@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.VisualBasic.FileIO;
+using Penumbra.Api.Enums;
 
 namespace FFXIVPenumbraHanhua.Services;
 
@@ -19,6 +20,9 @@ public sealed class BackupManager
     private readonly MarkService _mark;
 
     public string LastResult { get; private set; } = "";
+
+    /// <summary> 恢复备份成功后触发（用于开发功能：自动重跑未翻译模组汉化）。 </summary>
+    public event Action? RestoreCompleted;
 
     public sealed record BackupInfo(string ModDir, string FileName, string BakPath, DateTime Time, bool IsZip);
 
@@ -126,8 +130,14 @@ public sealed class BackupManager
 
             // ReloadMod 按（目录, 名称）匹配：只传目录可能重载不到，优先从已加载列表取显示名
             var entry = _penumbra.Mods.FirstOrDefault(m => m.Directory == b.ModDir);
-            _penumbra.Reload(b.ModDir, entry?.Name ?? "");
-            _log.Info($"[恢复备份] 已还原 {b.ModDir}（{b.FileName}，原备份已移至回收站，已清除「已翻译」标记，已重载 Penumbra）");
+            if (entry == null)
+                _log.Warn($"[恢复备份] 未在 Penumbra 列表找到目录「{b.ModDir}」，重载未触发（游戏内可能需手动刷新）");
+            var ec = _penumbra.Reload(b.ModDir, entry?.Name ?? "");
+            if (ec != PenumbraApiEc.Success)
+                _log.Warn($"[恢复备份] Penumbra 重载返回 {ec}（目录={b.ModDir}，名称={entry?.Name ?? "(空)"}），游戏内可能未刷新");
+            else
+                _log.Info($"[恢复备份] 已还原 {b.ModDir}（{b.FileName}，原备份已移至回收站，已清除「已翻译」标记，已重载 Penumbra）");
+            RestoreCompleted?.Invoke();
             return true;
         }
         catch (Exception ex)

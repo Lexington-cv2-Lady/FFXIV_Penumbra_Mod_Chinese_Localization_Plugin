@@ -56,7 +56,7 @@ public class WikiExportWindow : Window, IDisposable
         // 提取模式
         if (ImGui.RadioButton("分类提取（每个分类一个 json，互不影响）", _perCat)) _perCat = true;
         ImGui.SameLine();
-        if (ImGui.RadioButton("汇总提取（全部合并到 汇总.json）", !_perCat)) _perCat = false;
+        if (ImGui.RadioButton("wiki汇总（全部合并到 wiki汇总.json）", !_perCat)) _perCat = false;
         ImGui.Spacing();
 
         // 分类勾选（分类提取模式）

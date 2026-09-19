@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.1.4.0</Version>
+    <Version>1.1.5.0</Version>
     <!-- 插件 ID（InternalName）= 程序集名，必须为 ASCII；显示名（Name）用中文。 -->
     <AssemblyName>FFXIV_Penumbra_Mod_Chinese_Localization_Plugin</AssemblyName>
     <!-- 不从 NuGet 包复制 pdb 调试符号（保持输出目录整洁） -->
@@ -16,8 +16,8 @@
 汉化前自动备份（zip 按份数轮转），可一键还原且保留 Penumbra 的选项状态；支持 Penumbra 新旧双格式、纯中文输出、黑名单保留英文专名。
 词典来源：我的翻译 / 个性翻译 / wiki 术语对照 / AI 知识库 / 单词黑名单；AI 翻译内置多家国内主流服务商（按平台自动拆批），也支持导出后交给外部 AI 翻译再汇总。
 可将 Penumbra 模组的英文选项一键中文化，适合追求中文界面的玩家。</Description>
-    <RepoUrl>https://github.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin</RepoUrl>
-    <IconUrl>https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/main/Data/icon.png</IconUrl>
+    <RepoUrl>https://github.com/Lexington-cv2-Lady/FF14-MOD-Options-Chinese-Localization-Tool</RepoUrl>
+    <IconUrl>https://raw.githubusercontent.com/Lexington-cv2-Lady/FF14-MOD-Options-Chinese-Localization-Tool/main/Data/icon.png</IconUrl>
     <Tags>汉化;翻译;模组;penumbra;ffxiv;chinese;localization;中文</Tags>
     <CategoryTags>utility</CategoryTags>
     <!-- dev 插件部署目录（构建后自动复制）。用 $(APPDATA) 环境变量，避免写死个人用户名路径；

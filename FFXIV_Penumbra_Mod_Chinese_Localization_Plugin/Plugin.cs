@@ -27,6 +27,12 @@ public sealed class Plugin : IDalamudPlugin
     private string _initialTranslationPath;
     private string _initialDictionaryPath;
 
+    // 全自动汉化触发调度（D2/D3：启动/新模组自动，默认关）
+    private DateTime _startupHanuaDeadline;   // 启动自动汉化触发时刻（插件加载后 10 秒，等 Penumbra/IPC/词典稳定）
+    private bool _startupHanuaFired;          // 启动触发是否已执行过（一生只跑一次）
+    private DateTime _newModArrivalTime = DateTime.MinValue; // 新模组到达时刻（防抖基准）
+    private bool _newModArmed;                // 新模组自动汉化是否已挂起待触发
+
     public Configuration Configuration { get; init; }
     public PenumbraService Penumbra { get; init; }
     public DictionaryService Dict { get; init; }
@@ -53,6 +59,8 @@ public sealed class Plugin : IDalamudPlugin
     public WikiExportWindow WikiExportWindow { get; init; }
     public LogWindow LogWindow { get; init; }
     public FileListWindow FileListWindow { get; init; }
+    public OptionEditWindow OptionEditWindow { get; init; }
+    public DevWindow DevWindow { get; init; }
 
     public Plugin()
     {
@@ -95,8 +103,20 @@ public sealed class Plugin : IDalamudPlugin
         AiSettingsWindow = new AiSettingsWindow(this);
         AiConfigWindow = new AiConfigWindow(this);
         WikiExportWindow = new WikiExportWindow(this);
+        DevWindow = new DevWindow(this);
+
+        // 开发功能：恢复备份后自动重跑未翻译模组汉化
+        Backup.RestoreCompleted += () =>
+        {
+            if (Configuration.AutoHanhuaAfterRestore)
+            {
+                AppLog.Info("[开发功能] 恢复备份完成，自动重跑未翻译模组汉化");
+                MainWindow.StartAutoHanhua();
+            }
+        };
         LogWindow = new LogWindow(this);
         FileListWindow = new FileListWindow(this);
+        OptionEditWindow = new OptionEditWindow(this);
 
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(DictionaryWindow);
@@ -107,6 +127,8 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.AddWindow(WikiExportWindow);
         WindowSystem.AddWindow(LogWindow);
         WindowSystem.AddWindow(FileListWindow);
+        WindowSystem.AddWindow(OptionEditWindow);
+        WindowSystem.AddWindow(DevWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -126,6 +148,14 @@ public sealed class Plugin : IDalamudPlugin
         // 自动备份：启动为无备份模组补备份；新增模组事件即时备份
         try { Backup.BackupMissing(Penumbra.Mods, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); } catch { }
         Penumbra.ModAddedEvent += d => { try { Backup.BackupNew(d, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); } catch { } };
+        // 新模组自动汉化：只挂起计时，真正触发在 DrawAll 里延迟 8 秒（等批量导入稳定、Penumbra 列表刷完）
+        Penumbra.ModAddedEvent += _ =>
+        {
+            if (!Configuration.AutoHanhuaOnNewMod) return;
+            _newModArrivalTime = DateTime.Now;
+            _newModArmed = true;
+        };
+        _startupHanuaDeadline = DateTime.Now.AddSeconds(10);
         ReloadDictionary();
         Snapshot.EnsureRoot();
         // 启动清理：删除独立版遗留的旧 .json.bak 垃圾备份（时间戳格式按份数轮转保留）
@@ -154,6 +184,7 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary> 统一绘制：给所有窗口加明显边框（窗口边框 + 内部 Child 边框统一），再绘制窗口系统。 </summary>
     private void DrawAll()
     {
+        AutoHanhuaTick(); // 全自动汉化触发调度（启动延迟 / 新模组防抖）
         ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 2.5f);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildBorderSize, 2f); // Child 边框与窗口边框统一
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 6f);
@@ -177,6 +208,37 @@ public sealed class Plugin : IDalamudPlugin
     public void ReloadDictionary()
     {
         Dict.Load(Configuration.DictionaryPath);
+    }
+
+    /// <summary>
+    /// 全自动汉化触发调度（每帧 Draw 调用，UI 线程）：
+    /// ① 启动自动：加载 10 秒后触发一次（一生一次，等 Penumbra/IPC/词典稳定）；
+    /// ② 新模组自动：ModAddedEvent 挂起后延迟 8 秒触发（批量导入防抖；已有任务在跑时 StartAutoHanhua 内部自动跳过）。
+    /// 开关默认关，未配 Key / 无未翻译模组时 StartAutoHanhua 内部静默跳过。
+    /// </summary>
+    private void AutoHanhuaTick()
+    {
+        try
+        {
+            if (!_startupHanuaFired && Configuration.AutoHanhuaOnStart &&
+                DateTime.Now >= _startupHanuaDeadline)
+            {
+                _startupHanuaFired = true;
+                AppLog.Info("[全自动] 启动延迟触发");
+                MainWindow.StartAutoHanhua();
+            }
+            if (_newModArmed && Configuration.AutoHanhuaOnNewMod &&
+                DateTime.Now >= _newModArrivalTime.AddSeconds(8))
+            {
+                _newModArmed = false;
+                AppLog.Info("[全自动] 新模组到达延迟触发");
+                MainWindow.StartAutoHanhua();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"[全自动] 触发调度失败：{ex.Message}");
+        }
     }
 
     /// <summary> 目录变更后自动迁移：翻译目录 → 翻译 json；词典目录 → .英文快照 / wiki / AI知识库 文件夹与词典 json。目标已存在不覆盖。 </summary>
@@ -377,6 +439,7 @@ public sealed class Plugin : IDalamudPlugin
         WikiExportWindow.Dispose();
         LogWindow.Dispose();
         FileListWindow.Dispose();
+        OptionEditWindow.Dispose();
         Penumbra.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
@@ -395,5 +458,7 @@ public sealed class Plugin : IDalamudPlugin
     public void ToggleAiConfigUi() => AiConfigWindow.Toggle();
     public void ToggleWikiUi() => WikiExportWindow.Toggle();
     public void ToggleLogUi() => LogWindow.Toggle();
+    public void ToggleDevUi() => DevWindow.Toggle();
     public void ToggleFileListUi() => FileListWindow.Toggle();
+    public void ToggleOptionEditUi() => OptionEditWindow.Toggle();
 }

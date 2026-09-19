@@ -15,7 +15,7 @@ using FFXIVPenumbraHanhua.Services;
 
 namespace FFXIVPenumbraHanhua.Windows;
 
-/// <summary> 汉化流程窗口：① 提取英文 → ② 预翻译 → ③ AI 翻译 → ④ 汇总已翻译内容 → ⑤ 翻译写入MOD。 </summary>
+/// <summary> 半自动汉化流程窗口：① 提取英文 → ② 预翻译 → ③ AI 翻译 → ④ 汇总已翻译内容 → ⑤ 翻译写入MOD。 </summary>
 public class TranslatePipelineWindow : Window, IDisposable
 {
     private readonly Plugin _plugin;
@@ -33,7 +33,7 @@ public class TranslatePipelineWindow : Window, IDisposable
     private string _taskStatus = "";
     private bool _stopRequested; // 已请求停止（避免重复点击反复改写状态文字）
 
-    public TranslatePipelineWindow(Plugin plugin) : base("汉化流程###HanhuaPipeline")
+    public TranslatePipelineWindow(Plugin plugin) : base("半自动汉化流程###HanhuaPipeline")
     {
         Size = new Vector2(640, 480);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -61,7 +61,7 @@ public class TranslatePipelineWindow : Window, IDisposable
         var modRoot = _plugin.Penumbra.GetModRoot();
         var notFound = string.IsNullOrEmpty(modRoot) || !Directory.Exists(modRoot);
 
-        ImGui.TextWrapped("流程：① 提取英文 → ② 预翻译（词典预填）→ ③ AI 翻译 → ④ 汇总已翻译内容（编入词典）→ ⑤ 翻译写入MOD。");
+        ImGui.TextWrapped("半自动流程：① 提取英文 → ② 预翻译（词典预填）→ ③ AI 翻译 → ④ 汇总已翻译内容（编入词典）→ ⑤ 翻译写入MOD。");
         ImGui.Spacing();
         Ui.Hint($"翻译目录：{transDir}（{(Directory.Exists(transDir) ? "存在" : "不存在，提取时会自动创建")}）");
         ImGui.Spacing();
@@ -218,7 +218,7 @@ public class TranslatePipelineWindow : Window, IDisposable
                             var total = 0;
                             foreach (var input in files)
                             {
-                                var output = Path.ChangeExtension(input, null) + "_已翻译.json";
+                                var output = input.Replace("_未翻译.json", "_已翻译.json");
                                 _taskStatus = $"AI 翻译中：{Path.GetFileName(input)}…";
                                 total += await _ai.TranslateAsync(input, output, cfg, token);
                                 if (token.IsCancellationRequested) break;

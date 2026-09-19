@@ -210,8 +210,12 @@ public sealed class AiTranslateService
         {
             body["thinking"] = new JsonObject { ["type"] = "disabled" };
         }
-        else if (b.Contains("bigmodel") && m.Contains("glm-5.2"))
+        else if (b.Contains("bigmodel") &&
+                 (m.Contains("glm-4.5") || m.Contains("glm-4.6") || m.Contains("glm-4.7") ||
+                  m.Contains("glm-5")))
         {
+            // 智谱 glm-4.5+ 全系推理模型：思考会吃光 max_tokens 导致 content 为空、
+            // 走 reasoning_content 兜底返回思考过程（非 JSON）——必须关思考，否则整批白跑
             body["thinking"] = new JsonObject { ["type"] = "disabled" };
         }
         else if (b.Contains("moonshot") && m.Contains("kimi-k2.6"))
@@ -332,6 +336,25 @@ public sealed class AiTranslateService
             return 0;
         }
 
+        // D4 跨项原文去重：key 格式「模组目录/文件||字段||原文」，同一原文（跨模组/跨文件/跨层）
+        // 只送 AI 一次，返回译文后按原文映射回填到所有完整 key——省 token、省时间，且同原文译文天然一致。
+        static string OriginOfKey(string k)
+        {
+            var parts = k.Split(new[] { "||" }, StringSplitOptions.None);
+            return parts.Length >= 3 ? string.Join("||", parts, 2, parts.Length - 2) : k;
+        }
+        var origToKeys = new Dictionary<string, List<string>>();
+        foreach (var k in pending)
+        {
+            var orig = OriginOfKey(k);
+            if (!origToKeys.TryGetValue(orig, out var list))
+                origToKeys[orig] = list = new List<string>();
+            list.Add(k);
+        }
+        var uniqueOrigins = origToKeys.Keys.ToList();
+        if (pending.Count - uniqueOrigins.Count > 0)
+            _log.Info($"AI 翻译：跨项去重 {pending.Count} 项 → {uniqueOrigins.Count} 个唯一原文（同原文只送一次）");
+
         // 规则段
         var rules = root["翻译规则"] as JsonObject ?? ExtractService.BuildTranslationRules(cfg.DictionaryPath);
 
@@ -340,20 +363,20 @@ public sealed class AiTranslateService
         var ok = 0;
         var errors = new List<string>();
 
-        // 自动分批：条数不超过 batchSize，且内容字符数不超过平台上限（超限自动拆批）
+        // 自动分批：按去重后的原文分批（条数不超 batchSize，字符数不超平台上限）
         var batches = new List<List<string>>();
         var cur = new List<string>();
         var curChars = 0;
-        foreach (var k in pending)
+        foreach (var orig in uniqueOrigins)
         {
-            var itemChars = k.Length;
+            var itemChars = orig.Length;
             if (cur.Count >= batchSize || (cur.Count > 0 && curChars + itemChars > maxBatchChars))
             {
                 batches.Add(cur);
                 cur = new List<string>();
                 curChars = 0;
             }
-            cur.Add(k);
+            cur.Add(orig);
             curChars += itemChars;
         }
         if (cur.Count > 0) batches.Add(cur);
@@ -368,15 +391,16 @@ public sealed class AiTranslateService
                 break;
             }
             var batch = batches[bi];
-            var batchObj = new JsonObject();
-            foreach (var k in batch)
-            {
-                if (options.ContainsKey(k)) batchObj[k] = "";
-                else if (descriptions.ContainsKey(k)) batchObj[k] = "";
-            }
+            // 送 AI 的报文：[{原文, 译文}] 对象数组（与「我的翻译.json」行内格式一致）。
+            // 译文字段填原文作为占位：具名字段「原文/译文」并列，模型不会把空值骨架原样回显。
+            var items = new JsonArray();
+            foreach (var orig in batch)
+                items.Add(new JsonObject { ["原文"] = orig, ["译文"] = orig });
+            var batchObj = new JsonObject { ["items"] = items };
 
-            var sysMsg = "你是 FFXIV 模组汉化助手。按以下规则把英文翻译为简体中文（纯中文，不带英文对照）。" +
-                "只输出 JSON，不要输出任何其他文字。JSON 结构：{\"_options\":{...},\"_descriptions\":{...}}，键原样保留。\n\n" +
+            var sysMsg = "你是 FFXIV 模组汉化助手。输入是一个 JSON 对象 {\"items\":[...]}，其中 items 是数组，每项 {\"原文\":..., \"译文\":...}。" +
+                "把每一项的【译文】字段从英文翻译成简体中文（纯中文，不带英文对照；人名/专有名词如 Rue/YAB/v1/v2 可保留原文）。" +
+                "【原文】字段保持原样不改，只把【译文】替换成中文。只输出同样结构的 JSON，不要任何其他文字。\n\n" +
                 rules.ToJsonString();
 
             try
@@ -395,29 +419,46 @@ public sealed class AiTranslateService
                 if (parsed == null)
                 {
                     errors.Add("AI 返回无法解析的内容（可能是限流/超长，建议减小批量）");
+                    _log.Warn($"AI 翻译：无法解析，原始返回前 300 字：{Truncate(text ?? "", 300)}");
                     continue;
                 }
 
-                var got = 0;
-                if (parsed["_options"] is JsonObject po)
+                // 诊断：AI 实际返回条数与送出条数对照（0 命中排障用）
+                if (parsed["items"] is JsonArray arrDbg)
                 {
-                    foreach (var kv in po)
-                    {
-                        if (options.ContainsKey(kv.Key) && kv.Value != null && kv.Value.ToString().Length > 0)
-                        {
-                            options[kv.Key] = kv.Value.ToString();
-                            got++;
-                        }
-                    }
+                    var ret = arrDbg.Take(5)
+                        .Select(x => x is JsonObject jo && jo.ContainsKey("原文") ? jo["原文"]!.ToString() : "?")
+                        .ToList();
+                    _log.Info($"AI 翻译：返回 items {arrDbg.Count} 条 [{string.Join(" | ", ret)}]；送出 [{string.Join(" | ", batch.Take(5))}]");
                 }
-                if (parsed["_descriptions"] is JsonObject pd)
+                else
                 {
-                    foreach (var kv in pd)
+                    _log.Warn($"AI 翻译：返回无 items 数组，原始前 300 字：{Truncate(text ?? "", 300)}");
+                }
+
+                var got = 0;
+                if (parsed["items"] is JsonArray arr)
+                {
+                    foreach (var node in arr)
                     {
-                        if (descriptions.ContainsKey(kv.Key) && kv.Value != null && kv.Value.ToString().Length > 0)
+                        if (node is not JsonObject it) continue;
+                        var orig = it.TryGetPropertyValue("原文", out var okNode) ? okNode?.ToString() ?? "" : "";
+                        var zh = it.TryGetPropertyValue("译文", out var zhNode) ? zhNode?.ToString() ?? "" : "";
+                        if (string.IsNullOrEmpty(orig) || string.IsNullOrEmpty(zh)) continue;
+                        // 原文→译文：回填到该原文对应的所有完整 key（options/descriptions 两层）
+                        if (!origToKeys.TryGetValue(orig, out var keys)) continue;
+                        foreach (var fullKey in keys)
                         {
-                            descriptions[kv.Key] = kv.Value.ToString();
-                            got++;
+                            if (options.ContainsKey(fullKey))
+                            {
+                                options[fullKey] = zh;
+                                got++;
+                            }
+                            else if (descriptions.ContainsKey(fullKey))
+                            {
+                                descriptions[fullKey] = zh;
+                                got++;
+                            }
                         }
                     }
                 }
@@ -503,7 +544,7 @@ public sealed class AiTranslateService
                 ["model"] = model,
                 ["messages"] = new JsonArray(
                     new JsonObject { ["role"] = "system", ["content"] = sysMsg },
-                    new JsonObject { ["role"] = "user", ["content"] = "待翻译内容（键必须原样保留，值填中文译文）：\n" + batchObj.ToJsonString() }),
+                    new JsonObject { ["role"] = "user", ["content"] = "待翻译内容（保持 {原文, 译文} 结构，只把【译文】字段替换成简体中文）：\n" + batchObj.ToJsonString() }),
                 ["temperature"] = cfg.AiTemperature,
                 ["max_tokens"] = maxTok
             };

@@ -48,10 +48,6 @@ public class MainWindow : Window, IDisposable
     private DateTime _markCacheTime = DateTime.MinValue;
     // 断线自动重连节流：未连接时不再每帧发起 IPC 调用
     private DateTime _lastAutoRefresh = DateTime.MinValue;
-    // 详情区选项编辑缓冲
-    private readonly Dictionary<string, string> _editBufs = new();
-    private string _editFileKey = "";
-    private bool _showAllOptions;
 
     // 详情区
     private ModFileInfo? _selectedFile;
@@ -72,6 +68,9 @@ public class MainWindow : Window, IDisposable
     // 「重新下载」二次确认（覆盖模组文件的重操作）
     private bool _restoreArmed2;
     private DateTime _restoreArmedUntil2 = DateTime.MinValue;
+    // 详情区「还原备份」二次确认（覆盖性操作）
+    private bool _restoreBakArmed;
+    private DateTime _restoreBakArmedUntil = DateTime.MinValue;
 
     // 详情区文件列表/英文快照缓存：Draw 每帧执行，按（目录 mtime, 内部 json 最大 mtime）判定失效，
     // 避免大模组（数十 group 文件）每帧全量解析 JSON。仅 UI 线程访问。
@@ -169,8 +168,10 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
 
-        // 双栏：左 = 模组列表（分隔条可拖动），右 = 详情
+        // 双栏：左 = 模组列表（分隔条可拖动），右 = 详情；底部留固定高度给日志预览
         var avail = ImGui.GetContentRegionAvail();
+        const float logH = 90f;
+        var bodyH = Math.Max(100f, avail.Y - logH);
         var splitterW = 6f * ImGuiHelpers.GlobalScale;
         var listW = Math.Max(200f, avail.X * _split);
         var y0 = ImGui.GetCursorPosY();
@@ -181,8 +182,8 @@ public class MainWindow : Window, IDisposable
 
         // 记录左侧列表子区域的屏幕矩形（仅框选该区域时锁定窗口，不影响拖标题栏移动窗口）
         _listRectMin = ImGui.GetCursorScreenPos();
-        _listRectMax = _listRectMin + new Vector2(listW, avail.Y);
-        using (var left = ImRaii.Child("##ModList", new Vector2(listW, avail.Y), true))
+        _listRectMax = _listRectMin + new Vector2(listW, bodyH);
+        using (var left = ImRaii.Child("##ModList", new Vector2(listW, bodyH), true))
         {
             if (left.Success)
             {
@@ -316,10 +317,32 @@ public class MainWindow : Window, IDisposable
             ImGui.GetColorU32(new Vector4(0.7f, 0.7f, 0.7f, _draggingSplit || hoverBar ? 0.6f : 0.25f)));
 
         ImGui.SetCursorPos(new Vector2(listW + hotW, y0));
-        using (var right = ImRaii.Child("##ModDetail", new Vector2(Math.Max(100f, avail.X - listW - hotW), avail.Y), true))
+        using (var right = ImRaii.Child("##ModDetail", new Vector2(Math.Max(100f, avail.X - listW - hotW), bodyH), true))
         {
             if (!right.Success) return;
             DrawDetail();
+        }
+
+        // 底部日志预览（最近 6 条，自动滚动到底）
+        ImGui.Separator();
+        using (var logBox = ImRaii.Child("##MainLog", new Vector2(0, logH), true))
+        {
+            var entries = plugin.AppLog.Snapshot(); // 新→旧
+            var show = entries.Take(6).Reverse().ToList(); // 旧→新显示
+            foreach (var e in show)
+            {
+                var color = e.Lv switch
+                {
+                    AppLog.Level.Error => new Vector4(1f, 0.45f, 0.45f, 1f),
+                    AppLog.Level.Warn => new Vector4(1f, 0.85f, 0.4f, 1f),
+                    _ => new Vector4(0.75f, 0.85f, 0.95f, 1f)
+                };
+                ImGui.TextColored(color, $"[{e.Time:HH:mm:ss}] {e.Text}");
+            }
+            if (show.Count > 0)
+            {
+                ImGui.SetScrollHereY(1f);
+            }
         }
 
         // 一键汉化（无 Key）指引弹窗
@@ -444,10 +467,19 @@ public class MainWindow : Window, IDisposable
         return s + "…";
     }
 
-    /// <summary> 顶部功能导航：各功能独立窗口。 </summary>
+    /// <summary> 顶部功能导航：各功能独立窗口。AI 设置置顶——全自动流程第一步就是配 Key（用户要求）。 </summary>
     private void DrawNavBar()
     {
-        if (ImGui.Button("汉化流程"))
+        if (ImGui.Button("AI 设置"))
+        {
+            plugin.ToggleAiSettingsUi();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("供应商 / API Key / 模型 / AI 配置列表（自定义服务商、清空预设配置）/ 测试连接");
+        }
+        Ui.SameLineIfFits(Ui.ButtonWidth("半自动汉化流程"));
+        if (ImGui.Button("半自动汉化流程"))
         {
             plugin.TogglePipelineUi();
         }
@@ -487,15 +519,13 @@ public class MainWindow : Window, IDisposable
         {
             plugin.ToggleLogUi();
         }
-        Ui.SameLineIfFits(Ui.ButtonWidth("AI 设置"));
-        if (ImGui.Button("AI 设置"))
+        Ui.SameLineIfFits(Ui.ButtonWidth("开发功能"));
+        if (ImGui.Button("开发功能"))
         {
-            plugin.ToggleAiSettingsUi();
+            plugin.ToggleDevUi();
         }
         if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip("供应商 / API Key / 模型 / AI 配置列表（自定义服务商、清空预设配置）/ 测试连接");
-        }
+            ImGui.SetTooltip("实验性开关与调试按钮（新用户无需关注）");
         ImGui.Separator();
     }
 
@@ -506,16 +536,7 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(new Vector4(0.6f, 0.85f, 1f, 1f), "|");
         Ui.SameLineIfFits(ImGui.CalcTextSize(dict.Status).X);
         ImGui.TextWrapped(dict.Status);
-        Ui.SameLineIfFits(Ui.ButtonWidth("刷新"));
-        if (ImGui.Button("刷新"))
-        {
-            penumbra.Refresh();
-        }
-        Ui.SameLineIfFits(Ui.ButtonWidth("重载词典"));
-        if (ImGui.Button("重载词典"))
-        {
-            plugin.ReloadDictionary();
-        }
+
 
         if (_autoRefresh && penumbra.Mods.Count == 0 && penumbra.Status.StartsWith("未连接", StringComparison.Ordinal)
             && (DateTime.Now - _lastAutoRefresh).TotalSeconds >= 3)
@@ -714,108 +735,16 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
 
-        // 选项编辑（可直接修改中英文）
+        // 选项编辑入口：表单迁到独立二级窗口，主详情区只放一个按钮
         var file = _selectedFile!;
-
-        // 原文对照：优先取英文快照（写入/翻译后文件已是中文，快照保留英文原文），无快照回退当前值
-        var snapInfo = GetEnglishCached(mod.Directory, file.FileName);
-        string OriginalOf(int gIndex, int? oIndex, string current)
+        ImGui.TextWrapped($"当前文件：{file.FileName}　（{file.Groups.Count} 组 / {CountOptions(file)} 项）");
+        if (ImGui.Button("选项编辑…"))
         {
-            var g = snapInfo?.Groups.FirstOrDefault(x => x.Index == gIndex);
-            if (g == null) return current;
-            var en = oIndex == null
-                ? g.Name
-                : g.Options.FirstOrDefault(x => x.Index == oIndex)?.Name ?? current;
-            return string.IsNullOrWhiteSpace(en) ? current : en;
-        }
-        ImGui.TextWrapped($"选项编辑（{CountOptions(file)} 项，直接改中英文，点保存写回）：");
-        ImGui.Spacing();
-
-        // 切换文件时重置编辑缓冲
-        if (_editFileKey != file.Path)
-        {
-            _editFileKey = file.Path;
-            _editBufs.Clear();
-            _showAllOptions = false;
-        }
-
-        var rowW = ImGui.GetContentRegionAvail().X;
-        // 右侧预留 230*scale：原文灰字 + 行内间距；「贴」按钮删除后其宽度已并入输入框
-        var inputW = Math.Max(120f, rowW - 230f * ImGuiHelpers.GlobalScale);
-        var shown = 0;
-        var limit = _showAllOptions ? int.MaxValue : 30;
-        var truncated = false;
-
-        foreach (var g in file.Groups)
-        {
-            // 组名编辑
-            if (g.Name.Length > 0 || g.Options.Count > 0)
-            {
-                if (shown >= limit) { truncated = true; break; }
-                var gk = $"{file.Path}|G{g.Index}";
-                if (!_editBufs.TryGetValue(gk, out var gv)) _editBufs[gk] = gv = g.Name;
-                Ui.Hint(string.IsNullOrEmpty(g.Description) ? "组名：" : $"组名（{g.Description}）：");
-                ImGui.SetNextItemWidth(inputW);
-                if (ImGui.InputText($"##g{g.Index}", ref gv, 1024)) _editBufs[gk] = gv;
-                if (ImGui.IsItemHovered())
-                {
-                    ImGui.SetTooltip("组名（可直接改中英文）\n原文：" + OriginalOf(g.Index, null, g.Name));
-                }
-                shown++;
-            }
-
-            foreach (var o in g.Options)
-            {
-                if (shown >= limit) { truncated = true; break; }
-                var k = $"{file.Path}|{g.Index}|{o.Index}";
-                var origEn = OriginalOf(g.Index, o.Index, o.Name);
-                if (!_editBufs.TryGetValue(k, out var v)) _editBufs[k] = v = o.Name;
-                ImGui.SetNextItemWidth(inputW);
-                if (ImGui.InputText($"##e{shown}", ref v, 1024)) _editBufs[k] = v;
-                if (ImGui.IsItemHovered())
-                {
-                    ImGui.SetTooltip("输入框内可直接改中英文\n原文：" + origEn);
-                }
-                ImGui.SameLine();
-                var orig = origEn.Length > 22 ? origEn.Substring(0, 22) + "…" : origEn;
-                if (orig.Length > 0) ImGui.TextDisabled(orig);
-                shown++;
-            }
-            if (truncated) break;
-        }
-
-        if (truncated)
-        {
-            ImGui.Spacing();
-            if (ImGui.Button("显示全部选项"))
-            {
-                _showAllOptions = true;
-            }
-        }
-        else if (CountOptions(file) > 0)
-        {
-            ImGui.Spacing();
-            ImGui.TextDisabled($"共 {CountOptions(file)} 项，已全部显示");
-        }
-
-        ImGui.Spacing();
-        if (ImGui.Button("保存修改"))
-        {
-            SaveEdits(file, mod);
+            plugin.ToggleOptionEditUi();
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("先自动备份原文件，再把输入框内容写回模组，随后触发重载");
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("放弃修改"))
-        {
-            _result = "已放弃未保存的修改";
-            ReloadSelectedFile();
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip("丢弃输入框未保存的修改，重新从文件读取");
+            ImGui.SetTooltip("在独立窗口打开：直接改中英文组名/选项，保存即写回模组并触发游戏重载");
         }
 
         ImGui.Spacing();
@@ -834,6 +763,50 @@ public class MainWindow : Window, IDisposable
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip($"词典翻译写入（离线·覆写旧译法）：{mod.Name}\n（先自动备份，再写回 meta.json / group_*.json，随后触发 Penumbra 重载）");
+        }
+
+        // 还原备份（本地 zip；与「重新下载」不同：不联网，直接用最近一次写回前的备份覆盖当前选项文本）
+        ImGui.SameLine();
+        var bakRoot = penumbra.GetModRoot();
+        var latestBak = string.IsNullOrEmpty(bakRoot)
+            ? null
+            : plugin.Backup.ListBackups(bakRoot).FirstOrDefault(b => b.ModDir == mod.Directory);
+        var bakArmed = _restoreBakArmed && DateTime.Now < _restoreBakArmedUntil;
+        if (latestBak == null)
+        {
+            ImGui.BeginDisabled();
+            ImGui.Button("还原备份");
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("本模组暂无备份（备份在首次写回/保存修改时自动创建）");
+        }
+        else
+        {
+            if (bakArmed) Ui.PushDanger();
+            if (ImGui.Button(bakArmed ? "确认还原" : "还原备份"))
+            {
+                if (!bakArmed)
+                {
+                    _restoreBakArmed = true;
+                    _restoreBakArmedUntil = DateTime.Now.AddSeconds(3);
+                    _result = $"⚠ 将用最新备份「{latestBak.FileName}」还原本模组（覆盖当前选项文本，保留已勾选状态），3 秒内再点一次确认";
+                }
+                else
+                {
+                    _restoreBakArmed = false;
+                    var ok = plugin.Backup.Restore(bakRoot!, latestBak);
+                    _result = ok ? plugin.Backup.LastResult : "还原失败，详见日志";
+                    penumbra.Refresh();
+                    ReloadSelectedFile();
+                }
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip($"用本地最新备份还原本模组：{latestBak.FileName}\n" +
+                                 "回到备份时的内容（通常为英文），自动清除「已翻译」标记并重载游戏；备份本身移至回收站。\n" +
+                                 "为防误点：首次点击只提示，3 秒内再点一次才执行。");
+            }
+            if (bakArmed) Ui.PopDanger();
         }
 
         // ── 一键汉化（单模组版：智能分流，有 Key 全自动；无 Key 停在词典预填，等外部 AI）──
@@ -1031,7 +1004,7 @@ public class MainWindow : Window, IDisposable
                 {
                     if (ct.IsCancellationRequested) break;
                     _ocStatus = $"③ AI 翻译：{Path.GetFileName(input)}…";
-                    var output = Path.ChangeExtension(input, null) + "_已翻译.json";
+                    var output = input.Replace("_未翻译.json", "_已翻译.json");
                     plugin.AiTranslate.TranslateAsync(input, output, cfg, ct).GetAwaiter().GetResult();
                     log.Append('\n').Append(plugin.AiTranslate.LastResult);
                 }
@@ -1057,6 +1030,52 @@ public class MainWindow : Window, IDisposable
                 _result = "一键汉化出错：" + ex.Message;
             }
         });
+    }
+
+    /// <summary>
+    /// 全自动汉化入口（启动 / 新模组触发，静默执行）：取所有未翻译模组跑完整五步闭环。
+    /// 前置检查：已有任务在跑跳过；未配 Key / 目录静默跳过；主窗口未打开也照常跑（结果留状态栏+日志）。
+    /// </summary>
+    public void StartAutoHanhua()
+    {
+        try
+        {
+            if (_ocTask != null && !_ocTask.IsCompleted)
+            {
+                plugin.AppLog.Info("[全自动] 已有汉化任务在跑，本轮自动触发跳过");
+                return;
+            }
+            var cfg = plugin.Configuration;
+            if (string.IsNullOrWhiteSpace(cfg.DictionaryPath) || !Directory.Exists(cfg.DictionaryPath))
+            {
+                plugin.AppLog.Info("[全自动] 词典目录未配置，跳过自动触发");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(cfg.TranslationPath))
+            {
+                plugin.AppLog.Info("[全自动] 翻译目录未配置，跳过自动触发");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg)))
+            {
+                plugin.AppLog.Info("[全自动] 未配置 API Key，跳过自动触发");
+                return;
+            }
+            // 全部未翻译模组（无「已翻译」标记）
+            var mods = penumbra.Mods.Where(m => !plugin.Mark.HasMark(m.Directory)).ToList();
+            if (mods.Count == 0)
+            {
+                plugin.AppLog.Info("[全自动] 没有未翻译模组，无需处理");
+                return;
+            }
+            plugin.AppLog.Info($"[全自动] 开始：{mods.Count} 个未翻译模组（提取→预填→AI→汇总→写回）");
+            _ocSummary = true; // 全自动默认汇总提取（同原文跨模组天然去重友好）
+            StartOneClick(mods);
+        }
+        catch (Exception ex)
+        {
+            plugin.AppLog.Error($"[全自动] 触发失败：{ex.Message}");
+        }
     }
 
     /// <summary> 外部 AI 流程收尾：把翻译目录里的 _已翻译.json 汇总进词典，再写回指定模组并重载。 </summary>
@@ -1109,6 +1128,32 @@ public class MainWindow : Window, IDisposable
     private void DrawOneClickAll()
     {
         ImGui.BeginGroup();
+        // 全自动开关（默认关；需已配 API Key，运行静默，进度在下方状态栏）
+        var cfg = plugin.Configuration;
+        var onStart = cfg.AutoHanhuaOnStart;
+        if (ImGui.Checkbox("启动后自动汉化", ref onStart) && onStart != cfg.AutoHanhuaOnStart)
+        {
+            cfg.AutoHanhuaOnStart = onStart;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("插件启动约 10 秒后自动扫一遍未翻译模组并跑完整流程（提取→词典预填→AI→汇总→写回）。\n" +
+                             "需已在「AI 设置」配好 Key；未配 Key 时静默跳过，不打扰。");
+        }
+        Ui.SameLineIfFits(Ui.ButtonWidth("新模组自动汉化") + ImGui.GetFrameHeight());
+        var onNewMod = cfg.AutoHanhuaOnNewMod;
+        if (ImGui.Checkbox("新模组自动汉化", ref onNewMod) && onNewMod != cfg.AutoHanhuaOnNewMod)
+        {
+            cfg.AutoHanhuaOnNewMod = onNewMod;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("Penumbra 里新模组加入后自动跑完整汉化流程。\n需已配 Key；运行中已有任务在跑时自动排队跳过本轮。");
+        }
+
+        ImGui.Spacing();
         if (ImGui.RadioButton("汇总提取（默认）", _ocSummary)) _ocSummary = true;
         Ui.SameLineIfFits(Ui.ButtonWidth("按模组提取") + ImGui.GetFrameHeight());
         if (ImGui.RadioButton("按模组提取", !_ocSummary)) _ocSummary = false;
@@ -1212,7 +1257,7 @@ public class MainWindow : Window, IDisposable
         var files = Directory.GetFiles(transDir, "*_未翻译.json", SearchOption.TopDirectoryOnly).ToList();
         if (files.Count == 0)
         {
-            _result = "未找到 _未翻译.json：请先点「一键汉化（伪）」或到「汉化流程」① 提取英文";
+            _result = "未找到 _未翻译.json：请先点「一键汉化（伪）」或到「半自动汉化流程」① 提取英文";
             return;
         }
         try
@@ -1492,7 +1537,7 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary> 保存详情区编辑：备份（zip）→ 写回输入框内容 → 重读文件 → 触发 Penumbra 重载。 </summary>
-    private void SaveEdits(ModFileInfo file, ModEntry mod)
+    internal void SaveEdits(ModFileInfo file, ModEntry mod, Dictionary<string,string> bufs)
     {
         try
         {
@@ -1528,7 +1573,7 @@ public class MainWindow : Window, IDisposable
             if (groupsArr == null && node["Mod"] is JsonObject modWrap)
                 groupsArr = modWrap["Groups"] as JsonArray;
 
-            foreach (var kv in _editBufs)
+            foreach (var kv in bufs)
             {
                 var parts = kv.Key.Split('|');
                 if (parts.Length < 2) continue;
@@ -1602,7 +1647,7 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary> 重新读取当前模组的文件，刷新编辑缓冲。 </summary>
-    private void ReloadSelectedFile()
+    internal void ReloadSelectedFile()
     {
         var modRoot = penumbra.GetModRoot();
         if (_selected < 0 || _selected >= penumbra.Mods.Count || string.IsNullOrEmpty(modRoot))
@@ -1613,9 +1658,6 @@ public class MainWindow : Window, IDisposable
         var mod = penumbra.Mods[_selected];
         var files = plugin.ModFiles.ReadModFiles(Path.Combine(modRoot, mod.Directory));
         _selectedFile = files.FirstOrDefault(x => x.Path == _selectedFile?.Path) ?? files.FirstOrDefault();
-        _editFileKey = _selectedFile?.Path ?? "";
-        _editBufs.Clear();
-        _showAllOptions = false;
     }
 
     /// <summary> 详情区专用 ReadModFiles：按（目录 mtime, 内部 json 最大 mtime）缓存，文件增删改自动失效。仅 UI 线程。 </summary>
@@ -1647,7 +1689,7 @@ public class MainWindow : Window, IDisposable
     }
 
     /// <summary> 详情区专用英文快照读取：按快照文件 mtime 缓存解析结果。仅 UI 线程。 </summary>
-    private ModFileInfo? GetEnglishCached(string modDir, string fileName)
+    internal ModFileInfo? GetEnglishCached(string modDir, string fileName)
     {
         var p = Path.Combine(plugin.Configuration.DictionaryPath ?? "", ".英文快照", modDir, fileName);
         DateTime stamp = DateTime.MinValue;
@@ -1662,6 +1704,12 @@ public class MainWindow : Window, IDisposable
         _snapCache = parsed;
         return parsed;
     }
+
+    /// <summary> 供选项编辑窗口使用：当前聚焦的文件（未选中返回 null）。 </summary>
+    internal ModFileInfo? FocusedFile => _selectedFile;
+
+    /// <summary> 供选项编辑窗口使用：主窗口最近一次操作结果文本。 </summary>
+    internal string ResultText => _result;
 
     /// <summary> 供文件总览窗口使用：当前聚焦的模组（未选中返回 null）。 </summary>
     internal ModEntry? FocusedMod => _selected >= 0 && _selected < penumbra.Mods.Count ? penumbra.Mods[_selected] : null;
@@ -1682,9 +1730,6 @@ public class MainWindow : Window, IDisposable
         if (hit != null)
         {
             _selectedFile = hit;
-            _editFileKey = hit.Path;
-            _editBufs.Clear();
-            _showAllOptions = false;
         }
         IsOpen = true;
     }

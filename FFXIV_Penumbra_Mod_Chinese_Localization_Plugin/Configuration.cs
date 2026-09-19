@@ -21,6 +21,16 @@ public class Configuration : IPluginConfiguration
     /// <summary> 写回前备份轮转保留份数。 </summary>
     public int BackupCount { get; set; } = 5;
 
+    // ── 全自动汉化（默认关：需用户显式开启；运行中静默，进度在主窗口状态栏）──
+    /// <summary> 插件启动后 ~10 秒自动扫一遍未翻译模组并跑全自动汉化（提取→词典预填→AI→汇总→写回；需已配 API Key，未配则静默跳过）。 </summary>
+    public bool AutoHanhuaOnStart { get; set; }
+
+    /// <summary> Penumbra 新模组加入后自动跑全自动汉化（需已配 API Key；未配则静默跳过）。 </summary>
+    public bool AutoHanhuaOnNewMod { get; set; }
+
+    /// <summary> 【开发功能】恢复备份后自动重跑未翻译模组的汉化（还原=重置，立即补回译文）。 </summary>
+    public bool AutoHanhuaAfterRestore { get; set; }
+
     // ── AI 翻译设置 ──
     /// <summary> 已选 AI 供应商（OpenAI 兼容端点预置表的下标；-1 = 手工自定义模式）。 </summary>
     public int AiProvider { get; set; }

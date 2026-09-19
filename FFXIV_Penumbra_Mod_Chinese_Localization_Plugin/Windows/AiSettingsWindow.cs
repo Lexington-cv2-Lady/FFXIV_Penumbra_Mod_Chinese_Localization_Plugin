@@ -174,7 +174,7 @@ public class AiSettingsWindow : Window, IDisposable
         if (string.IsNullOrWhiteSpace(AiTranslateService.GetApiKey(cfg)))
         {
             Ui.ColoredWrapped(new Vector4(1f, 0.5f, 0.2f, 1f), "未填写 Key：AI 翻译不可用，可改用外部 AI 翻译（导出 _未翻译.json → 外部翻译 → ④ 汇总 → ⑤ 写回）。");
-            Ui.Hint("免费 AI 路线：在「汉化流程」① 导出 _未翻译.json（连同 翻译规则.json）交给外部 AI，翻好改名为 _已翻译.json 放回翻译目录，再点 ④ 汇总 → ⑤ 翻译写入MOD。");
+            Ui.Hint("免费 AI 路线：在「半自动汉化流程」① 导出 _未翻译.json（连同 翻译规则.json）交给外部 AI，翻好改名为 _已翻译.json 放回翻译目录，再点 ④ 汇总 → ⑤ 翻译写入MOD。");
         }
 
         ImGui.Spacing();

@@ -284,9 +284,9 @@ public sealed class WikiExportService
             else
             {
                 var outObj = new JsonObject { ["terms"] = summary.DeepClone() };
-                File.WriteAllText(Path.Combine(catDir, "汇总.json"),
+                File.WriteAllText(Path.Combine(catDir, "wiki汇总.json"),
                     outObj.ToJsonString(JsonFile.Indented), Encoding.UTF8);
-                log?.Invoke("[完成] wiki 术语词典已更新（wiki_术语对照\\汇总.json，独立只读底料，读取时自动生效）");
+                log?.Invoke("[完成] wiki 术语词典已更新（wiki_术语对照\\wiki汇总.json，独立只读底料，读取时自动生效）");
             }
 
             if (noise > 0)
@@ -430,7 +430,7 @@ public sealed class WikiExportService
         foreach (var f in Directory.GetFiles(catDir, "*.json", SearchOption.TopDirectoryOnly))
         {
             if (Path.GetFileName(f) == "wiki_术语对照_黑名单.json") continue;
-            if (Path.GetFileName(f) == "汇总.json") continue;
+            if (Path.GetFileName(f) == "wiki汇总.json") continue;
             try
             {
                 var root = JsonNode.Parse(File.ReadAllText(f)) as JsonObject;
