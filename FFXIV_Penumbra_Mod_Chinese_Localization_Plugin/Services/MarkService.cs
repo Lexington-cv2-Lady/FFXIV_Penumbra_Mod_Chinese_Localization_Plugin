@@ -151,7 +151,9 @@ public sealed class MarkService
         if (dict.IsBlacklisted(text)) return false;
         if (!HasAsciiLetter(text)) return false;
 
-        var zh = dict.LookupMod($"{fileName}||{field}||{text}");
+        // 个性翻译（最高覆盖层）优先于 我的翻译
+        var zh = dict.LookupCustom(text);
+        if (string.IsNullOrWhiteSpace(zh)) zh = dict.LookupMod($"{fileName}||{field}||{text}");
         if (string.IsNullOrWhiteSpace(zh)) zh = dict.LookupTerm(text);
         return !string.IsNullOrWhiteSpace(zh);
     }

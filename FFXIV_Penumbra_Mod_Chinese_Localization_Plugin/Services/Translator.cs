@@ -29,6 +29,10 @@ public static class Translator
             return ShellToPure(orig, dict);
         }
 
+        // 0) 个性翻译（最高覆盖层）：优先于 我的翻译 的 mods / terms
+        var c = dict.LookupCustom(orig);
+        if (!string.IsNullOrEmpty(c)) return ToPureChinese(c, dict);
+
         // 1) mods 层整条（精确 key）
         if (!string.IsNullOrEmpty(modKey))
         {
@@ -61,7 +65,8 @@ public static class Translator
             var zh = "";
             if (t.Length > 0 && !dict.IsBlacklisted(t))
             {
-                zh = dict.LookupTerm(t) ?? "";
+                zh = dict.LookupCustom(t) ?? "";
+                if (zh.Length == 0) zh = dict.LookupTerm(t) ?? "";
                 // 块内词边界最长子串替换（如 "White lace" 无整条 -> 拆词）
                 if (zh.Length == 0 && t.Length > 1)
                 {

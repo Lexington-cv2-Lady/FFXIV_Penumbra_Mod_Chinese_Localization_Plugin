@@ -1158,6 +1158,18 @@ public class MainWindow : Window, IDisposable
             ImGui.SetTooltip("Penumbra 里新模组加入后自动跑完整汉化流程。\n需已配 Key；运行中已有任务在跑时自动排队跳过本轮。");
         }
 
+        var onUpdate = cfg.AutoReHanhuaOnUpdate;
+        if (ImGui.Checkbox("Penumbra 更新后自动重覆盖译文", ref onUpdate) && onUpdate != cfg.AutoReHanhuaOnUpdate)
+        {
+            cfg.AutoReHanhuaOnUpdate = onUpdate;
+            cfg.Save();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("Penumbra 更新/重下模组、把中文还原成英文后，自动用离线词典把译文填回一次（默认开启）。\n" +
+                             "只改 Name/Description 文本，绝不重置您已选好的选项启用/选择状态；无需配 Key、不联网。");
+        }
+
         ImGui.Spacing();
         if (ImGui.RadioButton("汇总提取（默认）", _ocSummary)) _ocSummary = true;
         Ui.SameLineIfFits(Ui.ButtonWidth("按模组提取") + ImGui.GetFrameHeight());
@@ -1546,10 +1558,15 @@ public class MainWindow : Window, IDisposable
     {
         try
         {
-            // 先自动备份整个模组（zip），防翻车
+            // 先自动备份整个模组（zip），防翻车；备份失败则中止保存，与导入/还原路径一致
             var modDirPath = Path.GetDirectoryName(file.Path) ?? "";
             var modDirName = Path.GetFileName(modDirPath);
-            plugin.Backup.CreateModZip(modDirPath, plugin.Configuration.BackupCount);
+            if (string.IsNullOrEmpty(modDirPath) || plugin.Backup.CreateModZip(modDirPath, plugin.Configuration.BackupCount) == null)
+            {
+                _result = "保存失败：备份当前模组失败，已中止保存（未改动任何文件）";
+                plugin.AppLog.Error($"[保存修改] {mod.Directory}/{file.FileName}：备份失败，已中止保存");
+                return;
+            }
 
             // 保存前若文件仍为纯英文：存英文快照（改中文后仍可用原文覆写）
             try

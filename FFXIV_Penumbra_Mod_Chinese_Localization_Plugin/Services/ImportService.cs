@@ -207,16 +207,33 @@ public sealed class ImportService
         return g?.Options.FirstOrDefault(x => x.Index == oIndex)?.Name;
     }
 
-    /// <summary> 查词典译文：原文为空 / 已含中文（不重复覆盖）/ 黑名单 -> 不写回。mods 层精确键优先，再 terms 层。 </summary>
-    private static string? ApplyLookup(DictionaryService dict, string fileName, string field, string english)
+    /// <summary> 该英文条目是否会被词典命中（用于在写回/探测前判断是否需要覆盖；已中文/黑名单/无匹配则否）。 </summary>
+    public static bool CanTranslate(DictionaryService dict, string fileName, string field, string english)
     {
-        if (string.IsNullOrWhiteSpace(english)) return null;
-        if (dict.ContainsChinese(english)) return null;
-        if (dict.IsBlacklisted(english)) return null;
+        if (string.IsNullOrWhiteSpace(english)) return false;
+        if (dict.ContainsChinese(english)) return false;
+        if (dict.IsBlacklisted(english)) return false;
+
+        // 个性翻译（最高覆盖层）优先于 我的翻译（mods / terms）
+        var custom = dict.LookupCustom(english);
+        if (!string.IsNullOrWhiteSpace(custom) && custom != english) return true;
 
         var zh = dict.LookupMod($"{fileName}||{field}||{english}");
         if (zh == null) zh = dict.LookupTerm(english);
-        if (string.IsNullOrWhiteSpace(zh)) return null;
+        return !string.IsNullOrWhiteSpace(zh) && zh != english;
+    }
+
+    /// <summary> 查词典译文：原文为空 / 已含中文（不重复覆盖）/ 黑名单 -> 不写回。mods 层精确键优先，再 terms 层。 </summary>
+    private static string? ApplyLookup(DictionaryService dict, string fileName, string field, string english)
+    {
+        if (!CanTranslate(dict, fileName, field, english)) return null;
+
+        // 个性翻译（最高覆盖层）优先于 我的翻译（mods / terms）
+        var custom = dict.LookupCustom(english);
+        if (!string.IsNullOrWhiteSpace(custom) && custom != english) return custom;
+
+        var zh = dict.LookupMod($"{fileName}||{field}||{english}");
+        if (zh == null) zh = dict.LookupTerm(english);
         return zh == english ? null : zh;
     }
 }

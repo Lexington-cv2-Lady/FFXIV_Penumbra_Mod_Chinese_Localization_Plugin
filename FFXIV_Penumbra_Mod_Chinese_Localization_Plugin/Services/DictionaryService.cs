@@ -14,9 +14,11 @@ namespace FFXIVPenumbraHanhua.Services;
 public sealed class DictionaryService
 {
     private readonly AppLog _log;
-    private readonly Dictionary<string, string> _terms = new();       // 大小写敏感词表
-    private readonly Dictionary<string, string> _termsLower = new();   // 小写兜底词表
-    private readonly Dictionary<string, string> _mods = new();         // mods 层整条（relKey||Opt||原文 -> 译文）
+        private readonly Dictionary<string, string> _terms = new();       // 大小写敏感词表
+        private readonly Dictionary<string, string> _termsLower = new();   // 小写兜底词表
+        private readonly Dictionary<string, string> _custom = new();       // 个性翻译：最高优先级覆盖层（英文 -> 译文）
+        private readonly Dictionary<string, string> _customLower = new();  // 个性翻译小写兜底
+        private readonly Dictionary<string, string> _mods = new();         // mods 层整条（relKey||Opt||原文 -> 译文）
     private readonly HashSet<string> _blacklist = new(StringComparer.OrdinalIgnoreCase);     // 单词黑名单
     private readonly HashSet<string> _wikiBlacklist = new(StringComparer.OrdinalIgnoreCase); // wiki 黑名单
 
@@ -43,6 +45,8 @@ public sealed class DictionaryService
         DictionaryDir = dictionaryDir;
         _terms.Clear();
         _termsLower.Clear();
+        _custom.Clear();
+        _customLower.Clear();
         _mods.Clear();
         _blacklist.Clear();
         _wikiBlacklist.Clear();
@@ -91,6 +95,13 @@ public sealed class DictionaryService
     {
         if (_terms.TryGetValue(text, out var v)) return v;
         return _termsLower.TryGetValue(text.ToLowerInvariant(), out var v2) ? v2 : null;
+    }
+
+    /// <summary> 个性翻译：最高优先级覆盖层查询（大小写敏感优先，小写兜底）。 </summary>
+    public string? LookupCustom(string text)
+    {
+        if (_custom.TryGetValue(text, out var v)) return v;
+        return _customLower.TryGetValue(text.ToLowerInvariant(), out var v2) ? v2 : null;
     }
 
     public bool IsBlacklisted(string word) => _blacklist.Contains(word);
@@ -144,7 +155,9 @@ public sealed class DictionaryService
                                 var enS = en.GetString() ?? "";
                                 var zhS = zh.GetString() ?? "";
                                 if (enS.Length == 0) continue;
+                                // AI 知识库（overlayOnly）只兜底，不覆盖 我的翻译 的 mods 精确词条
                                 var key = $"{grp.Name}||{fieldName}||{enS}";
+                                if (overlayOnly && _mods.ContainsKey(key)) continue;
                                 _mods[key] = zhS;
                                 count++;
                             }
@@ -177,8 +190,8 @@ public sealed class DictionaryService
                 var enS = en.GetString() ?? "";
                 var zhS = zh.GetString() ?? "";
                 if (enS.Length == 0 || IsBlacklisted(enS)) continue;
-                _terms[enS] = zhS;
-                _termsLower[enS.ToLowerInvariant()] = zhS;
+                _custom[enS] = zhS;
+                _customLower[enS.ToLowerInvariant()] = zhS;
                 if (enS.Length > MaxTermLen) MaxTermLen = Math.Min(enS.Length, 200);
                 count++;
             }

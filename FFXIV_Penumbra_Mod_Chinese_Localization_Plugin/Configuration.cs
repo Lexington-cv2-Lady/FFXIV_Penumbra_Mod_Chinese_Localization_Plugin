@@ -31,6 +31,9 @@ public class Configuration : IPluginConfiguration
     /// <summary> 【开发功能】恢复备份后自动重跑未翻译模组的汉化（还原=重置，立即补回译文）。 </summary>
     public bool AutoHanhuaAfterRestore { get; set; }
 
+    /// <summary> 【默认开】Penumbra 更新/重下模组、把中文还原成英文后，自动用离线词典把译文覆盖回一次（只改 Name/Description 文本，绝不重置选项启用/选择状态；无需 Key、不联网）。可取消。 </summary>
+    public bool AutoReHanhuaOnUpdate { get; set; } = true;
+
     // ── AI 翻译设置 ──
     /// <summary> 已选 AI 供应商（OpenAI 兼容端点预置表的下标；-1 = 手工自定义模式）。 </summary>
     public int AiProvider { get; set; }

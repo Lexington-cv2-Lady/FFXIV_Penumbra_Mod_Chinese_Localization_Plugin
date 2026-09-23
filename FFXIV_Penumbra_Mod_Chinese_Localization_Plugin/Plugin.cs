@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
@@ -33,6 +34,11 @@ public sealed class Plugin : IDalamudPlugin
     private bool _startupHanuaFired;          // 启动触发是否已执行过（一生只跑一次）
     private DateTime _newModArrivalTime = DateTime.MinValue; // 新模组到达时刻（防抖基准）
     private bool _newModArmed;                // 新模组自动汉化是否已挂起待触发
+
+    // 更新重覆盖（默认开）：Penumbra 无「模组更新」事件，故自建文件签名基线探测
+    private readonly Dictionary<string, (long mtime, long size)> _modSig = new();
+    private DateTime _lastReHanhuaPoll = DateTime.MinValue;
+    private const int ReHanhuaPollSeconds = 8;
 
     public Configuration Configuration { get; init; }
     public PenumbraService Penumbra { get; init; }
@@ -243,11 +249,98 @@ public sealed class Plugin : IDalamudPlugin
                 AppLog.Info("[全自动] 新模组到达延迟触发");
                 MainWindow.StartAutoHanhua();
             }
+            if (Configuration.AutoReHanhuaOnUpdate &&
+                DateTime.Now >= _lastReHanhuaPoll.AddSeconds(ReHanhuaPollSeconds))
+            {
+                _lastReHanhuaPoll = DateTime.Now;
+                DetectAndReHanhua();
+            }
         }
         catch (Exception ex)
         {
             AppLog.Error($"[全自动] 触发调度失败：{ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 更新重覆盖：Penumbra 无「模组更新」事件，故自建文件签名基线探测。
+    /// 每轮节流（ReHanhuaPollSeconds）对每个模组比对其 meta.json / group_*.json 的 mtime+size 签名：
+    /// 未变 -> 跳过；变了 -> 只读预扫是否有「被还原成英文且词典可命中」的可恢复项；
+    /// 有 -> 离线 ApplyDictionary（只改 Name/Description 文本，不动选项状态）填回并同步基线；
+    /// 无 -> 仅同步基线（如用户改选项导致 meta 重写），不动文件。
+    /// </summary>
+    private void DetectAndReHanhua()
+    {
+        try
+        {
+            var root = Penumbra.GetModRoot();
+            if (string.IsNullOrEmpty(root)) return;
+            foreach (var mod in Penumbra.Mods)
+            {
+                var modDir = Path.Combine(root, mod.Directory);
+                if (!Directory.Exists(modDir)) { _modSig.Remove(mod.Directory); continue; }
+
+                var sig = ComputeModSig(modDir);
+                if (_modSig.TryGetValue(mod.Directory, out var prev) && prev == sig)
+                    continue; // 无变化
+
+                if (HasRecoverableText(modDir))
+                {
+                    // 仅对该模组离线重覆盖（不调 AI、不联网；只改文本）
+                    var written = Import.ApplyDictionary(root, Dict, new[] { mod }, overwrite: false);
+                    _modSig[mod.Directory] = ComputeModSig(modDir); // 写回后签名已变，同步基线避免反复触发
+                    if (written > 0)
+                        AppLog.Info($"[更新重覆盖] 已用离线词典回填 {mod.Name}（{written} 项；选项启用/选择状态未动）");
+                }
+                else
+                {
+                    _modSig[mod.Directory] = sig; // 无可恢复项，仅同步基线
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"[更新重覆盖] 探测失败：{ex.Message}");
+        }
+    }
+
+    /// <summary> 模组可汉化文件的 mtime 与 size 之和作为内容签名（meta.json + group_*.json）。 </summary>
+    private static (long mtime, long size) ComputeModSig(string modDir)
+    {
+        long mtime = 0, size = 0;
+        var files = new List<string>(Directory.GetFiles(modDir, "meta.json"));
+        files.AddRange(Directory.GetFiles(modDir, "group_*.json"));
+        foreach (var f in files)
+        {
+            try
+            {
+                var fi = new FileInfo(f);
+                mtime += fi.LastWriteTimeUtc.Ticks;
+                size += fi.Length;
+            }
+            catch { }
+        }
+        return (mtime, size);
+    }
+
+    /// <summary> 只读预扫：该模组当前是否存在「非中文、非黑名单、含英文字母、且词典可命中」的可恢复条目。 </summary>
+    private bool HasRecoverableText(string modDir)
+    {
+        var files = ModFiles.ReadModFiles(modDir);
+        foreach (var fi in files)
+        {
+            var fileName = fi.FileName;
+            foreach (var g in fi.Groups)
+            {
+                if (ImportService.CanTranslate(Dict, fileName, "Name", g.Name)) return true;
+                foreach (var o in g.Options)
+                {
+                    if (ImportService.CanTranslate(Dict, fileName, "Opt", o.Name)) return true;
+                    if (ImportService.CanTranslate(Dict, fileName, "Description", o.Description)) return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// <summary> 目录变更后自动迁移：翻译目录 -> 翻译 json；词典目录 -> .英文快照 / wiki / AI知识库 文件夹与词典 json。目标已存在不覆盖。 </summary>
