@@ -128,7 +128,7 @@ public class DictionaryWindow : Window, IDisposable
         ImGui.Spacing();
 
         // 词典结构说明
-        Ui.Hint("词典目录结构：\n  ├ 我的翻译.json —— 主词典（mods 双层 + terms 数组），优先命中\n  ├ 个性翻译.json —— 词级覆盖层，覆盖 我的翻译\n  ├ 单词黑名单.json —— 命中词保留英文，不翻译\n  ├ wiki_术语对照\\ —— 分类术语只读兜底（不覆盖用户词条）\n  │   └ wiki_术语对照_黑名单.json —— 剔除污染词\n  └ AI知识库\\AI知识库.json —— 只读底料，优先级最低");
+        Ui.Hint("词典目录结构：\n  · 我的翻译.json —— 主词典（mods 双层 + terms 数组），优先命中\n  · 个性翻译.json —— 词级覆盖层，覆盖 我的翻译\n  · 单词黑名单.json —— 命中词保留英文，不翻译\n  · wiki_术语对照\\ —— 分类术语只读兜底（不覆盖用户词条）\n      · wiki_术语对照_黑名单.json —— 剔除污染词\n  · AI知识库\\AI知识库.json —— 只读底料，优先级最低");
 
         // 文件选择对话框（浏览文件夹用）
         _fileDialog.Draw();

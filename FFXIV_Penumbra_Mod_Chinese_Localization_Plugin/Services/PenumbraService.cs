@@ -83,10 +83,16 @@ public sealed class PenumbraService : IDisposable
     {
         try
         {
-            return _reloadMod.Invoke(modDirectory, modName);
+            var ec = _reloadMod.Invoke(modDirectory, modName);
+            if (ec == PenumbraApiEc.Success)
+                _log.Info($"[重载] 已请求 Penumbra 重载模组：{modName}");
+            else
+                _log.Warn($"[重载] Penumbra 返回非成功：{modName} -> {ec}（可在 Penumbra 手动点重新加载模组）");
+            return ec;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _log.Error($"[重载] 请求重载失败：{modName}（{ex.Message}）。请在 Penumbra 手动点重新加载模组");
             return PenumbraApiEc.InvalidArgument;
         }
     }

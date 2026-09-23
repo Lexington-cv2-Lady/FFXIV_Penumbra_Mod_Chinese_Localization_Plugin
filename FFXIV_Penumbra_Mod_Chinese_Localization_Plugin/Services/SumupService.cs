@@ -49,7 +49,17 @@ public sealed class SumupService
             return -1;
         }
 
-        var dict = LoadDict(dictionaryDir);
+        JsonObject dict;
+        try
+        {
+            dict = LoadDict(dictionaryDir);
+        }
+        catch (Exception ex)
+        {
+            LastResult = "读取 我的翻译.json 失败（文件可能已损坏，已拒绝写回以防覆盖丢失）：" + ex.Message;
+            _log.Error("[汇总] " + LastResult);
+            return -1;
+        }
         var written = 0;
 
         foreach (var sec in new[] { "_options", "_descriptions" })
@@ -93,19 +103,17 @@ public sealed class SumupService
         return written;
     }
 
+    /// <summary>
+    /// 读取词典。文件不存在返回空词典；文件存在但解析失败时抛异常，
+    /// 由调用方拒绝写回（避免用空词典覆盖已损坏但可能可人工抢救的文件）。
+    /// </summary>
     private static JsonObject LoadDict(string dictionaryDir)
     {
         var dictPath = Path.Combine(dictionaryDir, "我的翻译.json");
         if (File.Exists(dictPath))
         {
-            try
-            {
-                return JsonNode.Parse(File.ReadAllText(dictPath, Encoding.UTF8)) as JsonObject ?? NewDict();
-            }
-            catch (Exception)
-            {
-                return NewDict();
-            }
+            var node = JsonNode.Parse(File.ReadAllText(dictPath, Encoding.UTF8));
+            return node as JsonObject ?? throw new InvalidDataException("根节点不是 JSON 对象");
         }
         return NewDict();
     }
@@ -122,7 +130,17 @@ public sealed class SumupService
             LastResult = "词典目录未配置";
             return -1;
         }
-        var dict = LoadDict(dictionaryDir);
+        JsonObject dict;
+        try
+        {
+            dict = LoadDict(dictionaryDir);
+        }
+        catch (Exception ex)
+        {
+            LastResult = "读取 我的翻译.json 失败（文件可能已损坏，已拒绝写回以防覆盖丢失）：" + ex.Message;
+            _log.Error("[沉淀] " + LastResult);
+            return -1;
+        }
         var written = 0;
         foreach (var e in entries)
             AddToDict(dict, e.ModDir, e.FileName, e.Field, e.En, e.Zh, ref written);
@@ -142,13 +160,13 @@ public sealed class SumupService
         return written;
     }
 
-    /// <summary> 写入词典文件。返回错误信息，成功返回 null。 </summary>
+    /// <summary> 原子写入词典文件（.tmp -> Move 覆盖）。返回错误信息，成功返回 null。 </summary>
     private static string? SaveDict(string dictPath, JsonObject dict, string dictionaryDir)
     {
         try
         {
             if (!Directory.Exists(dictionaryDir)) Directory.CreateDirectory(dictionaryDir);
-            File.WriteAllText(dictPath, dict.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+            JsonFile.WriteAtomic(dictPath, dict.ToJsonString(JsonFile.Indented));
             return null;
         }
         catch (Exception ex)

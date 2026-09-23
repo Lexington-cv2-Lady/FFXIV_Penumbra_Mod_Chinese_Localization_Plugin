@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 
@@ -15,4 +17,17 @@ internal static class JsonFile
         WriteIndented = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
+
+    /// <summary>
+    /// 原子写：先写 .tmp 再 File.Move 覆盖目标，避免写一半进程被杀 / 插件卸载导致文件截断、
+    /// 下次读取时解析失败、再用空词典覆盖写回造成全部沉淀译文丢失。
+    /// </summary>
+    public static void WriteAtomic(string path, string content)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, content, new UTF8Encoding(false));
+        File.Move(tmp, path, overwrite: true);
+    }
 }

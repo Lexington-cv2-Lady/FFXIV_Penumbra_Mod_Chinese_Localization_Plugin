@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -482,8 +483,9 @@ public sealed class AiTranslateService
         root["_descriptions"] = descriptions;
         try
         {
-            if (!Directory.Exists(Path.GetDirectoryName(outputPath))) Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            File.WriteAllText(outputPath, root.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+            var outDir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir)) Directory.CreateDirectory(outDir);
+            JsonFile.WriteAtomic(outputPath, root.ToJsonString(JsonFile.Indented));
         }
         catch (Exception ex)
         {
@@ -636,8 +638,9 @@ public sealed class AiTranslateService
         return want;
     }
 
-    /// <summary> 运行中学到的 max_tokens 上限（按端点 host 记）：被拒过一次后收敛到平台允许值。 </summary>
-    private static readonly Dictionary<string, long> _maxTokensLearned = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary> 运行中学到的 max_tokens 上限（按端点 host 记）：被拒过一次后收敛到平台允许值。
+    /// ConcurrentDictionary：批量翻译后台线程写、测试连接等 UI 线程读，避免并发触碰字典。 </summary>
+    private static readonly ConcurrentDictionary<string, long> _maxTokensLearned = new(StringComparer.OrdinalIgnoreCase);
 
     private static JsonObject? ParseJson(string? text)
     {

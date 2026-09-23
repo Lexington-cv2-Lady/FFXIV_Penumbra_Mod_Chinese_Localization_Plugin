@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Command;
@@ -158,6 +159,14 @@ public sealed class Plugin : IDalamudPlugin
         _startupHanuaDeadline = DateTime.Now.AddSeconds(10);
         ReloadDictionary();
         Snapshot.EnsureRoot();
+        // 启动自愈失效标记：内容被 Penumbra 升级 / 重下 / 手动替换还原成英文的模组，清除残留标记、回到未翻译列表
+        try
+        {
+            var healed = Mark.PruneStaleMarks(Penumbra.Mods, Dict, ModFiles);
+            if (healed.Count > 0)
+                AppLog.Info($"[启动] {healed.Count} 个模组内容已还原成英文，已清除失效标记：{string.Join("、", healed.Take(5))}{(healed.Count > 5 ? " 等" : "")}");
+        }
+        catch { /* 自愈失败不阻断启动 */ }
         // 启动清理：删除独立版遗留的旧 .json.bak 垃圾备份（时间戳格式按份数轮转保留）
         ModFileService.CleanupLegacyBak(Penumbra.GetModRoot(), Configuration.TranslationPath, Configuration.DictionaryPath,
             Math.Max(1, Configuration.BackupCount));

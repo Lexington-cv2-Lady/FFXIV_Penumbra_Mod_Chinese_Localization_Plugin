@@ -45,7 +45,7 @@ public sealed class EnglishSnapshotService
         {
             var dir = Path.Combine(Root, modDirName);
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, fileName), content);
+            JsonFile.WriteAtomic(Path.Combine(dir, fileName), content);
             return true;
         }
         catch (Exception)

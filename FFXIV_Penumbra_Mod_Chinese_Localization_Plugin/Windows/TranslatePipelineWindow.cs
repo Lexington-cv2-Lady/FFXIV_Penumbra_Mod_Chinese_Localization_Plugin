@@ -82,6 +82,9 @@ public class TranslatePipelineWindow : Window, IDisposable
             else
             {
                 var mods = _plugin.MainWindow.SelectedMods;
+                var healed = _plugin.Mark.PruneStaleMarks(mods, _dict, _plugin.ModFiles);
+                if (healed.Count > 0)
+                    _log.Info($"[提取] {healed.Count} 个选中模组内容已还原成英文，已清除失效标记、纳入提取");
                 var n = _extract.ExtractPerMod(mods, _skipMarked, transDir, modRoot ?? "");
                 _result = _extract.LastResult;
             }
@@ -102,6 +105,9 @@ public class TranslatePipelineWindow : Window, IDisposable
             else
             {
                 var mods = _plugin.MainWindow.SelectedMods;
+                var healed = _plugin.Mark.PruneStaleMarks(mods, _dict, _plugin.ModFiles);
+                if (healed.Count > 0)
+                    _log.Info($"[提取] {healed.Count} 个选中模组内容已还原成英文，已清除失效标记、纳入提取");
                 var n = _extract.Extract(mods, _skipMarked, transDir, modRoot ?? "");
                 _result = _extract.LastResult;
             }

@@ -436,7 +436,7 @@ public class MainWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("全选/取消当前列表（随「已翻译」筛选）。全取消后详情区回到一键汉化（伪）");
+            ImGui.SetTooltip("全选/取消当前列表（随「已翻译」筛选）。全取消后详情区回到一键汉化");
         }
         ImGui.SameLine(Math.Max(40f, availW - checkMarkW));
         if (ImGui.Checkbox("已翻译", ref _showMarked))
@@ -1061,6 +1061,11 @@ public class MainWindow : Window, IDisposable
                 plugin.AppLog.Info("[全自动] 未配置 API Key，跳过自动触发");
                 return;
             }
+            // 先自愈失效标记：内容被 Penumbra 升级 / 重下 / 手动替换还原成英文的模组，清除其残留标记
+            var healed = plugin.Mark.PruneStaleMarks(penumbra.Mods, plugin.Dict, plugin.ModFiles);
+            if (healed.Count > 0)
+                plugin.AppLog.Info($"[全自动] 检测到 {healed.Count} 个模组内容已还原成英文，已清除失效标记、重新汉化：{string.Join("、", healed.Take(5))}{(healed.Count > 5 ? " 等" : "")}");
+
             // 全部未翻译模组（无「已翻译」标记）
             var mods = penumbra.Mods.Where(m => !plugin.Mark.HasMark(m.Directory)).ToList();
             if (mods.Count == 0)
@@ -1189,7 +1194,7 @@ public class MainWindow : Window, IDisposable
         else
         {
             Ui.PushAccent();
-            var fakeClicked = ImGui.Button("一键汉化（伪）");
+            var fakeClicked = ImGui.Button("一键汉化");
             Ui.PopAccent();
             if (fakeClicked)
             {
@@ -1198,7 +1203,7 @@ public class MainWindow : Window, IDisposable
             if (ImGui.IsItemHovered())
             {
                 ImGui.SetTooltip("对当前列表（默认即全部未翻译模组）自动完成：提取 -> 词典预填 -> AI 翻译（已配 Key 时）-> 汇总 -> 写回并重载。\n" +
-                                 "称「伪」：未配 Key 时会停在词典预填，需要人工把 _未翻译.json 交给外部 AI、翻好放回后点「汇总并写入」。");
+                                 "未配 Key 时停在词典预填：把 _未翻译.json 交给免费 AI，翻好放回后点「汇总并写入」。");
             }
             Ui.SameLineIfFits(Ui.ButtonWidth("复制翻译提示词"));
             if (ImGui.Button("复制翻译提示词"))
@@ -1257,7 +1262,7 @@ public class MainWindow : Window, IDisposable
         var files = Directory.GetFiles(transDir, "*_未翻译.json", SearchOption.TopDirectoryOnly).ToList();
         if (files.Count == 0)
         {
-            _result = "未找到 _未翻译.json：请先点「一键汉化（伪）」或到「半自动汉化流程」① 提取英文";
+            _result = "未找到 _未翻译.json：请先点「一键汉化」或到「半自动汉化流程」① 提取英文";
             return;
         }
         try
@@ -1625,7 +1630,7 @@ public class MainWindow : Window, IDisposable
                 }
             }
 
-            File.WriteAllText(file.Path, node.ToJsonString(JsonFile.Indented));
+            JsonFile.WriteAtomic(file.Path, node.ToJsonString(JsonFile.Indented));
             _result = $"已保存 {changed} 项修改（原文件已自动备份）";
             plugin.AppLog.Info($"[保存修改] {mod.Directory}/{file.FileName}：已保存 {changed} 项（已自动备份）");
 

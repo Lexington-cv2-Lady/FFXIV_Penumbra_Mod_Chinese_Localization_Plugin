@@ -268,7 +268,7 @@ public sealed class BackupManager
                 return false;
             }
 
-            File.WriteAllText(currentMetaPath, cur.ToJsonString(JsonFile.Indented));
+            JsonFile.WriteAtomic(currentMetaPath, cur.ToJsonString(JsonFile.Indented));
             return true;
         }
         catch (Exception)

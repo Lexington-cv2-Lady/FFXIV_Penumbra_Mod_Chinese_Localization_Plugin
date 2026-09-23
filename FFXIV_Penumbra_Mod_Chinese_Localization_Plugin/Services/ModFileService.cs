@@ -265,7 +265,7 @@ public sealed class ModFileService
             }
 
             var options = JsonFile.Indented;
-            File.WriteAllText(filePath, node.ToJsonString(options));
+            JsonFile.WriteAtomic(filePath, node.ToJsonString(options));
             return true;
         }
         catch (Exception)
