@@ -117,7 +117,8 @@ public sealed class ModRestoreService
             }
         }
 
-        File.WriteAllText(metaPath, meta.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+        // 原子写：这是「用户的模组文件」，File.WriteAllText 先截断再写，中途被打断会让 Penumbra 无法解析该模组
+        JsonFile.WriteAtomic(metaPath, meta.ToJsonString(JsonFile.Indented));
 
         // 标准组的独立 group json（按 penumbraId 对应文件名）
         int pf = 0;
@@ -144,7 +145,7 @@ public sealed class ModRestoreService
                         var od = ho["description"]?.GetValue<string>();
                         if (od != null) mo["Description"] = od;
                     }
-                File.WriteAllText(gp, gj.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+                JsonFile.WriteAtomic(gp, gj.ToJsonString(JsonFile.Indented));
                 pf++;
             }
         }
@@ -268,13 +269,18 @@ public sealed class ModRestoreService
         beforeWrite?.Invoke();
 
         // 根级 json 整文件还原（含 default_mod.json）
+        // 同类对齐：File.Create 会先截断目标，拷贝中途被打断就留下半截 json；
+        // 改为「先写 .tmp 再替换」，与上面 meta 的原子写口径一致。
         foreach (var e in rootJsons)
         {
             using var src = e.Open();
-            using var dst = File.Create(Path.Combine(modDir, Path.GetFileName(e.Name)));
-            src.CopyTo(dst);
+            var target = Path.Combine(modDir, Path.GetFileName(e.Name));
+            var tmp = target + ".tmp";
+            using (var dst = File.Create(tmp)) src.CopyTo(dst);
+            File.Move(tmp, target, overwrite: true);
         }
-        File.WriteAllText(metaPath, meta.ToJsonString(JsonFile.Indented), Encoding.UTF8);
+        // 原子写：这是「用户的模组文件」，File.WriteAllText 先截断再写，中途被打断会让 Penumbra 无法解析该模组
+        JsonFile.WriteAtomic(metaPath, meta.ToJsonString(JsonFile.Indented));
 
         return $"已从原始 PMP 还原：组 {pg} / 选项 {po} / 根 json {rootJsons.Count} 个";
     }

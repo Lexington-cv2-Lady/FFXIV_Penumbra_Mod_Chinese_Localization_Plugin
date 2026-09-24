@@ -305,6 +305,8 @@ public class LogWindow : Window, IDisposable
         catch (Exception ex)
         {
             _openMsg = "打开失败：" + ex.Message;
+            // 除窗口内提示外再落一行日志：否则用户只看到一闪而过的提示，事后无法追查
+            _log.Warn($"[日志] 打开日志文件失败（{path}）：{ex.Message}");
         }
     }
 }

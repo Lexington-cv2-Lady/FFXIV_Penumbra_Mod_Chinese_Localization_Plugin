@@ -81,6 +81,9 @@ public class MainWindow : Window, IDisposable
     private DateTime _snapStamp;
     private ModFileInfo? _snapCache;
 
+    /// <summary> 快照时间戳读取失败是否已告警（该路径每帧调用，只记一次，避免写日志反成主线程周期 IO）。 </summary>
+    private bool _snapStatWarned;
+
     /// <summary> 翻译管线「仅提取勾选」用：当前勾选的模组列表（保持 Penumbra 列表顺序）。 </summary>
     public IReadOnlyList<ModEntry> SelectedMods
     {
@@ -362,7 +365,7 @@ public class MainWindow : Window, IDisposable
                     if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                     Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
                 }
-                catch { }
+                catch (Exception ex) { plugin.AppLog.Warn($"[界面] 打开翻译目录失败：{ex.Message}"); }
                 ImGui.CloseCurrentPopup();
             }
             ImGui.SameLine();
@@ -1715,7 +1718,16 @@ public class MainWindow : Window, IDisposable
     {
         var p = Path.Combine(plugin.Configuration.DictionaryPath ?? "", ".英文快照", modDir, fileName);
         DateTime stamp = DateTime.MinValue;
-        try { if (File.Exists(p)) stamp = File.GetLastWriteTimeUtc(p); } catch { }
+        try { if (File.Exists(p)) stamp = File.GetLastWriteTimeUtc(p); }
+        catch (Exception ex)
+        {
+            // 每帧调用的热路径：同类告警只记一次，避免写日志本身变成主线程周期磁盘 IO
+            if (!_snapStatWarned)
+            {
+                _snapStatWarned = true;
+                plugin.AppLog.Warn($"[界面] 读取快照时间戳失败（同类告警只记一次）：{p} - {ex.Message}");
+            }
+        }
 
         var key = modDir + "|" + fileName;
         if (_snapKey == key && _snapStamp == stamp) return _snapCache;

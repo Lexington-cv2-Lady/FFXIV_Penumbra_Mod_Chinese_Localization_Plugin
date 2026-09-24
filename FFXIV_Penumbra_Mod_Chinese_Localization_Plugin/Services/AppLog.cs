@@ -110,7 +110,13 @@ public sealed class AppLog
         }
         if (FilePath != null)
         {
-            try { lock (_fileLock) File.WriteAllText(FilePath, "", Encoding.UTF8); } catch { }
+            try { lock (_fileLock) File.WriteAllText(FilePath, "", Encoding.UTF8); }
+            catch (Exception ex)
+            {
+                // 只把失败留痕在内存（LastError 会显示在日志窗口置底条）；
+                // 不调 Add/Warn，避免「写文件失败 → 再写文件」的递归。
+                LastError = $"[{DateTime.Now:HH:mm:ss}] 清空日志文件失败：{ex.Message}";
+            }
         }
         Changed?.Invoke();
     }

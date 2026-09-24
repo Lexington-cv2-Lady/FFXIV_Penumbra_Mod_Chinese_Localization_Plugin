@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -42,10 +41,8 @@ public sealed class Plugin : IDalamudPlugin
     //   ① 后台 Task：只做磁盘 stat（ComputeModSig），签名变化者入队；
     //   ② 主线程：消费队列，做预扫（查词典）与离线写回。
     // 不整体挪后台的原因：DictionaryService 非并发设计，CanTranslate / ApplyDictionary
-    // 必须留在主线程；_modSig 跨线程读写，故改用 ConcurrentDictionary。
-    private readonly ConcurrentDictionary<string, (long mtime, long size)> _modSig = new();
-    private readonly ConcurrentQueue<string> _sigChanged = new(); // 后台扫出的「签名有变化」模组目录 key
-    private volatile bool _sigScanBusy;                           // 后台扫描进行中（防重入）
+    // 必须留在主线程。三段并发状态（基线 / 变化队列 / 防重入）收拢在 ModSignatureTracker。
+    private readonly ModSignatureTracker _sigTracker = new();
     private DateTime _lastReHanhuaPoll = DateTime.MinValue;
     private const int ReHanhuaPollSeconds = 8;
 
@@ -162,8 +159,13 @@ public sealed class Plugin : IDalamudPlugin
         Penumbra.Refresh();
 
         // 自动备份：启动为无备份模组补备份；新增模组事件即时备份
-        try { Backup.BackupMissing(Penumbra.Mods, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); } catch { }
-        Penumbra.ModAddedEvent += d => { try { Backup.BackupNew(d, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); } catch { } };
+        try { Backup.BackupMissing(Penumbra.Mods, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); }
+        catch (Exception ex) { AppLog.Warn($"[备份] 启动补备份失败（不阻断加载）：{ex.Message}"); }
+        Penumbra.ModAddedEvent += d =>
+        {
+            try { Backup.BackupNew(d, Penumbra.GetModRoot() ?? "", Configuration.BackupCount); }
+            catch (Exception ex) { AppLog.Warn($"[备份] 新模组备份失败（{d}）：{ex.Message}"); }
+        };
         // 新模组自动汉化：只挂起计时，真正触发在 DrawAll 里延迟 8 秒（等批量导入稳定、Penumbra 列表刷完）
         Penumbra.ModAddedEvent += _ =>
         {
@@ -184,7 +186,7 @@ public sealed class Plugin : IDalamudPlugin
         catch { /* 自愈失败不阻断启动 */ }
         // 启动清理：删除独立版遗留的旧 .json.bak 垃圾备份（时间戳格式按份数轮转保留）
         ModFileService.CleanupLegacyBak(Penumbra.GetModRoot(), Configuration.TranslationPath, Configuration.DictionaryPath,
-            Math.Max(1, Configuration.BackupCount));
+            Math.Max(1, Configuration.BackupCount), AppLog.Warn);
         Log.Information("FFXIV_penumbra的模组汉化插件 已加载");
     }
 
@@ -283,28 +285,32 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private void DispatchReHanhuaScan()
     {
-        if (_sigScanBusy) return; // 上一轮尚未扫完，跳过本轮（防重入）
+        if (!_sigTracker.TryBeginScan()) return; // 上一轮尚未扫完，跳过本轮（防重入）
         try
         {
-            var root = Penumbra.GetModRoot();
-            if (string.IsNullOrEmpty(root)) return;
-
             // 只把「目录 key + 磁盘路径」交给后台；后台不碰 Penumbra API、不查词典
             var items = new List<(string key, string path)>();
-            foreach (var mod in Penumbra.Mods)
+            var root = Penumbra.GetModRoot();
+            if (!string.IsNullOrEmpty(root))
             {
-                var modDir = Path.Combine(root, mod.Directory);
-                if (Directory.Exists(modDir)) items.Add((mod.Directory, modDir));
-                else _modSig.TryRemove(mod.Directory, out _); // 模组已不在，清掉旧基线
+                foreach (var mod in Penumbra.Mods)
+                {
+                    var modDir = Path.Combine(root, mod.Directory);
+                    if (Directory.Exists(modDir)) items.Add((mod.Directory, modDir));
+                    else _sigTracker.RemoveBaseline(mod.Directory); // 模组已不在，清掉旧基线
+                }
             }
-            if (items.Count == 0) return;
+            if (items.Count == 0)
+            {
+                _sigTracker.EndScan();
+                return;
+            }
 
-            _sigScanBusy = true;
             Task.Run(() => ScanModSignatures(items));
         }
         catch (Exception ex)
         {
-            _sigScanBusy = false;
+            _sigTracker.EndScan();
             AppLog.Error($"[更新重覆盖] 派发探测失败：{ex.Message}");
         }
     }
@@ -315,11 +321,7 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             foreach (var it in items)
-            {
-                var sig = ComputeModSig(it.path);
-                if (_modSig.TryGetValue(it.key, out var prev) && prev == sig) continue; // 无变化
-                _sigChanged.Enqueue(it.key);
-            }
+                _sigTracker.Observe(it.key, ComputeModSig(it.path)); // 无变化不入队
         }
         catch (Exception ex)
         {
@@ -327,7 +329,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         finally
         {
-            _sigScanBusy = false;
+            _sigTracker.EndScan();
         }
     }
 
@@ -337,32 +339,31 @@ public sealed class Plugin : IDalamudPlugin
     /// </summary>
     private void DrainReHanhuaChanges()
     {
-        if (_sigChanged.IsEmpty) return;
+        if (!_sigTracker.HasPending) return;
         try
         {
             var root = Penumbra.GetModRoot();
-            if (string.IsNullOrEmpty(root)) { _sigChanged.Clear(); return; }
+            if (string.IsNullOrEmpty(root)) { _sigTracker.ClearPending(); return; }
 
-            var batch = 0;
-            while (_sigChanged.TryDequeue(out var key) && batch++ < 8) // 每帧最多处理 8 个模组
+            foreach (var key in _sigTracker.Drain(8)) // 每帧最多处理 8 个模组
             {
                 var mod = Penumbra.Mods.FirstOrDefault(m => m.Directory == key);
-                if (mod == null) { _modSig.TryRemove(key, out _); continue; }
+                if (mod == null) { _sigTracker.RemoveBaseline(key); continue; }
 
                 var modDir = Path.Combine(root, mod.Directory);
-                if (!Directory.Exists(modDir)) { _modSig.TryRemove(key, out _); continue; }
+                if (!Directory.Exists(modDir)) { _sigTracker.RemoveBaseline(key); continue; }
 
                 if (HasRecoverableText(modDir))
                 {
                     // 仅对该模组离线重覆盖（不调 AI、不联网；只改文本）
                     var written = Import.ApplyDictionary(root, Dict, new[] { mod }, overwrite: false);
-                    _modSig[key] = ComputeModSig(modDir); // 写回后签名已变，同步基线避免反复触发
+                    _sigTracker.SetBaseline(key, ComputeModSig(modDir)); // 写回后签名已变，同步基线避免反复触发
                     if (written > 0)
                         AppLog.Info($"[更新重覆盖] 已用离线词典回填 {mod.Name}（{written} 项；选项启用/选择状态未动）");
                 }
                 else
                 {
-                    _modSig[key] = ComputeModSig(modDir); // 无可恢复项，仅同步基线
+                    _sigTracker.SetBaseline(key, ComputeModSig(modDir)); // 无可恢复项，仅同步基线
                 }
             }
         }

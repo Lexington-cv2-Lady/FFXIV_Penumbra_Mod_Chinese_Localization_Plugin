@@ -146,9 +146,11 @@ public sealed class ModFileService
     /// <summary>
     /// 启动清理：删除旧格式 .json.bak / .json.bak2（独立版遗留的完整备份），
     /// 时间戳格式 *.json.bak_YYYYMMDD_HHMMSS 按前缀分组、每组只保留最新 maxBackups 份。
-    /// penumbra 根目录递归，翻译/词典目录只扫顶层。失败的文件静默跳过（不中断）。
+    /// penumbra 根目录递归，翻译/词典目录只扫顶层。失败的文件跳过（不中断），但会通过 warn 记一行日志。
     /// </summary>
-    public static void CleanupLegacyBak(string? penumbraRoot, string? translationDir, string? dictionaryDir, int maxBackups)
+    /// <param name="warn">失败时的落日志回调（通常传 AppLog.Warn）。为 null 则只跳过不记。</param>
+    public static void CleanupLegacyBak(string? penumbraRoot, string? translationDir, string? dictionaryDir, int maxBackups,
+        Action<string>? warn = null)
     {
         var dirs = new[] { penumbraRoot, translationDir, dictionaryDir };
         for (var i = 0; i < dirs.Length; i++)
@@ -160,11 +162,13 @@ public sealed class ModFileService
             // 1) 旧格式完整备份 .json.bak / .json.bak2：直接删除
             foreach (var f in Directory.GetFiles(dir, "*.json.bak", search))
             {
-                try { File.Delete(f); } catch { }
+                try { File.Delete(f); }
+                catch (Exception ex) { warn?.Invoke($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
             }
             foreach (var f in Directory.GetFiles(dir, "*.json.bak2", search))
             {
-                try { File.Delete(f); } catch { }
+                try { File.Delete(f); }
+                catch (Exception ex) { warn?.Invoke($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
             }
 
             // 2) 时间戳格式 .json.bak_*：按前缀分组，每组保留最新 maxBackups 份
@@ -175,11 +179,15 @@ public sealed class ModFileService
                 {
                     foreach (var old in g.OrderByDescending(x => x, StringComparer.Ordinal).Skip(maxBackups))
                     {
-                        try { File.Delete(old); } catch { }
+                        try { File.Delete(old); }
+                        catch (Exception ex) { warn?.Invoke($"[清理] 轮转删除旧备份失败（已跳过）：{old} - {ex.Message}"); }
                     }
                 }
             }
-            catch { /* 枚举失败跳过 */ }
+            catch (Exception ex)
+            {
+                warn?.Invoke($"[清理] 枚举旧备份失败（跳过该目录）：{dir} - {ex.Message}");
+            }
         }
     }
 
