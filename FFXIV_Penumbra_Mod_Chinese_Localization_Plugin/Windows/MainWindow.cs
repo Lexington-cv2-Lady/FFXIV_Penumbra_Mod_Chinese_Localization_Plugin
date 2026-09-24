@@ -703,7 +703,7 @@ public class MainWindow : Window, IDisposable
         // 否则跨帧 ReferenceEquals 恒 false -> 选中高亮丢失、编辑区用旧对象
         _selectedFile = files.FirstOrDefault(x => x.Path == _selectedFile?.Path) ?? files[0];
 
-        ImGui.TextUnformatted("文件（点击查看选项）:");
+        ImGui.TextUnformatted("文件（点选一行，再按下方「选项编辑…」）:");
         ImGui.Spacing();
         // 文件多的模组（group 文件几十个）默认只显示前 3 条，折叠其余；「显示全部」走独立窗口
         var shownFiles = files.Count > 4 ? files.Take(3).ToList() : files;

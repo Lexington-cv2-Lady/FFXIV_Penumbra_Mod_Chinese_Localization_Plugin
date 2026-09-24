@@ -66,4 +66,9 @@
     </ItemGroup>
     <Copy SourceFiles="@(_DeployFiles)" DestinationFiles="@(_DeployFiles->'$(DevPluginDir)\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
+  <!-- 允许测试工程访问 internal 类型（如 JsonFile），用于回归测试 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.Tests" />
+  </ItemGroup>
+
 </Project>

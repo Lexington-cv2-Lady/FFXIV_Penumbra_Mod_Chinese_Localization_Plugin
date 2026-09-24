@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Command;
 using Dalamud.IoC;
@@ -35,8 +37,15 @@ public sealed class Plugin : IDalamudPlugin
     private DateTime _newModArrivalTime = DateTime.MinValue; // 新模组到达时刻（防抖基准）
     private bool _newModArmed;                // 新模组自动汉化是否已挂起待触发
 
-    // 更新重覆盖（默认开）：Penumbra 无「模组更新」事件，故自建文件签名基线探测
-    private readonly Dictionary<string, (long mtime, long size)> _modSig = new();
+    // 更新重覆盖（默认开）：Penumbra 无「模组更新」事件，故自建文件签名基线探测。
+    // 分两段跑（审查方第二道校验【中】整改：避免主线程周期性磁盘 IO 造成卡顿）：
+    //   ① 后台 Task：只做磁盘 stat（ComputeModSig），签名变化者入队；
+    //   ② 主线程：消费队列，做预扫（查词典）与离线写回。
+    // 不整体挪后台的原因：DictionaryService 非并发设计，CanTranslate / ApplyDictionary
+    // 必须留在主线程；_modSig 跨线程读写，故改用 ConcurrentDictionary。
+    private readonly ConcurrentDictionary<string, (long mtime, long size)> _modSig = new();
+    private readonly ConcurrentQueue<string> _sigChanged = new(); // 后台扫出的「签名有变化」模组目录 key
+    private volatile bool _sigScanBusy;                           // 后台扫描进行中（防重入）
     private DateTime _lastReHanhuaPoll = DateTime.MinValue;
     private const int ReHanhuaPollSeconds = 8;
 
@@ -253,8 +262,11 @@ public sealed class Plugin : IDalamudPlugin
                 DateTime.Now >= _lastReHanhuaPoll.AddSeconds(ReHanhuaPollSeconds))
             {
                 _lastReHanhuaPoll = DateTime.Now;
-                DetectAndReHanhua();
+                DispatchReHanhuaScan(); // 主线程只派发：取快照 -> 后台做磁盘 stat
             }
+
+            // 消费后台扫描结果：预扫（查词典）与写回都留在主线程，每帧限量避免卡帧
+            DrainReHanhuaChanges();
         }
         catch (Exception ex)
         {
@@ -264,48 +276,104 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>
     /// 更新重覆盖：Penumbra 无「模组更新」事件，故自建文件签名基线探测。
-    /// 每轮节流（ReHanhuaPollSeconds）对每个模组比对其 meta.json / group_*.json 的 mtime+size 签名：
-    /// 未变 -> 跳过；变了 -> 只读预扫是否有「被还原成英文且词典可命中」的可恢复项；
+    /// 主线程每帧只负责「派发 / 消费」，磁盘 stat 交给后台（审查方第二道校验【中】整改）。
+    /// 语义与整改前一致：未变 -> 跳过；变了 -> 只读预扫是否有「被还原成英文且词典可命中」的可恢复项；
     /// 有 -> 离线 ApplyDictionary（只改 Name/Description 文本，不动选项状态）填回并同步基线；
     /// 无 -> 仅同步基线（如用户改选项导致 meta 重写），不动文件。
     /// </summary>
-    private void DetectAndReHanhua()
+    private void DispatchReHanhuaScan()
     {
+        if (_sigScanBusy) return; // 上一轮尚未扫完，跳过本轮（防重入）
         try
         {
             var root = Penumbra.GetModRoot();
             if (string.IsNullOrEmpty(root)) return;
+
+            // 只把「目录 key + 磁盘路径」交给后台；后台不碰 Penumbra API、不查词典
+            var items = new List<(string key, string path)>();
             foreach (var mod in Penumbra.Mods)
             {
                 var modDir = Path.Combine(root, mod.Directory);
-                if (!Directory.Exists(modDir)) { _modSig.Remove(mod.Directory); continue; }
+                if (Directory.Exists(modDir)) items.Add((mod.Directory, modDir));
+                else _modSig.TryRemove(mod.Directory, out _); // 模组已不在，清掉旧基线
+            }
+            if (items.Count == 0) return;
 
-                var sig = ComputeModSig(modDir);
-                if (_modSig.TryGetValue(mod.Directory, out var prev) && prev == sig)
-                    continue; // 无变化
+            _sigScanBusy = true;
+            Task.Run(() => ScanModSignatures(items));
+        }
+        catch (Exception ex)
+        {
+            _sigScanBusy = false;
+            AppLog.Error($"[更新重覆盖] 派发探测失败：{ex.Message}");
+        }
+    }
+
+    /// <summary> 后台线程：仅做磁盘 stat，签名较基线有变化者入队。不碰词典、不碰 Penumbra。 </summary>
+    private void ScanModSignatures(List<(string key, string path)> items)
+    {
+        try
+        {
+            foreach (var it in items)
+            {
+                var sig = ComputeModSig(it.path);
+                if (_modSig.TryGetValue(it.key, out var prev) && prev == sig) continue; // 无变化
+                _sigChanged.Enqueue(it.key);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"[更新重覆盖] 后台签名扫描失败：{ex.Message}");
+        }
+        finally
+        {
+            _sigScanBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 主线程消费后台结果：预扫（查词典 —— DictionaryService 非并发设计，故留主线程）
+    /// 与离线写回（触发 Penumbra IPC，同样留主线程）。每帧限量，避免批量更新时卡帧。
+    /// </summary>
+    private void DrainReHanhuaChanges()
+    {
+        if (_sigChanged.IsEmpty) return;
+        try
+        {
+            var root = Penumbra.GetModRoot();
+            if (string.IsNullOrEmpty(root)) { _sigChanged.Clear(); return; }
+
+            var batch = 0;
+            while (_sigChanged.TryDequeue(out var key) && batch++ < 8) // 每帧最多处理 8 个模组
+            {
+                var mod = Penumbra.Mods.FirstOrDefault(m => m.Directory == key);
+                if (mod == null) { _modSig.TryRemove(key, out _); continue; }
+
+                var modDir = Path.Combine(root, mod.Directory);
+                if (!Directory.Exists(modDir)) { _modSig.TryRemove(key, out _); continue; }
 
                 if (HasRecoverableText(modDir))
                 {
                     // 仅对该模组离线重覆盖（不调 AI、不联网；只改文本）
                     var written = Import.ApplyDictionary(root, Dict, new[] { mod }, overwrite: false);
-                    _modSig[mod.Directory] = ComputeModSig(modDir); // 写回后签名已变，同步基线避免反复触发
+                    _modSig[key] = ComputeModSig(modDir); // 写回后签名已变，同步基线避免反复触发
                     if (written > 0)
                         AppLog.Info($"[更新重覆盖] 已用离线词典回填 {mod.Name}（{written} 项；选项启用/选择状态未动）");
                 }
                 else
                 {
-                    _modSig[mod.Directory] = sig; // 无可恢复项，仅同步基线
+                    _modSig[key] = ComputeModSig(modDir); // 无可恢复项，仅同步基线
                 }
             }
         }
         catch (Exception ex)
         {
-            AppLog.Error($"[更新重覆盖] 探测失败：{ex.Message}");
+            AppLog.Error($"[更新重覆盖] 重覆盖处理失败：{ex.Message}");
         }
     }
 
     /// <summary> 模组可汉化文件的 mtime 与 size 之和作为内容签名（meta.json + group_*.json）。 </summary>
-    private static (long mtime, long size) ComputeModSig(string modDir)
+    private (long mtime, long size) ComputeModSig(string modDir)
     {
         long mtime = 0, size = 0;
         var files = new List<string>(Directory.GetFiles(modDir, "meta.json"));
@@ -318,7 +386,11 @@ public sealed class Plugin : IDalamudPlugin
                 mtime += fi.LastWriteTimeUtc.Ticks;
                 size += fi.Length;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 通用 B.20「异常不能静默吞」：补一行日志（审查方第二道校验【低】整改）
+                AppLog.Warn($"[更新重覆盖] 读取文件信息失败（已跳过该文件）：{f} - {ex.Message}");
+            }
         }
         return (mtime, size);
     }

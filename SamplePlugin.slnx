@@ -2,4 +2,7 @@
   <Project Path="FFXIV_Penumbra_Mod_Chinese_Localization_Plugin/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.csproj">
     <Platform Project="x64" />
   </Project>
+  <Project Path="FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.Tests/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.Tests.csproj">
+    <Platform Project="x64" />
+  </Project>
 </Solution>

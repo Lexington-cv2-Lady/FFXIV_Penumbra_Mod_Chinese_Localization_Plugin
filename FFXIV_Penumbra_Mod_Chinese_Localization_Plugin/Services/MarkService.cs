@@ -91,8 +91,9 @@ public sealed class MarkService
     }
 
     /// <summary>
-    /// 标记是否真失效：有「已翻译」标记，但模组里存在「词典现在能译成中文、文件中却仍是英文」的条目
-    /// （内容被 Penumbra 升级 / 重新下载 / 手动替换还原成英文）。
+    /// 标记是否真失效：有「已翻译」标记，但模组内容已「以英文为主」地还原——
+    /// 即「仍是英文且词典可译」的字段数 ≥ 「已中文」字段数，且至少有一处中文（证明该模组曾被译过）。
+    /// 这样才不会把「绝大部分已译好、仅余零星英文」的正常模组误判为失效。
     /// 无选项模组、选项全是黑名单专名的模组不会被判失效，标记保留。
     /// </summary>
     public bool IsStale(string modDirectory, DictionaryService dict, ModFileService files)
@@ -103,25 +104,40 @@ public sealed class MarkService
             var dir = ModFullPath(Root, modDirectory);
             if (!Directory.Exists(dir)) return false;
 
+            var zh = 0; // 已中文（译好）的字段数
+            var en = 0; // 仍是英文且词典可译（疑似还原）的字段数
             foreach (var file in files.ReadModFiles(dir))
             {
                 var fileName = file.FileName;
                 foreach (var g in file.Groups)
                 {
-                    if (AwaitsTranslation(dict, fileName, "Name", g.Name)) return true;
+                    TallyField(dict, fileName, "Name", g.Name, ref zh, ref en);
                     foreach (var o in g.Options)
                     {
-                        if (AwaitsTranslation(dict, fileName, "Opt", o.Name)) return true;
-                        if (AwaitsTranslation(dict, fileName, "Description", o.Description)) return true;
+                        TallyField(dict, fileName, "Opt", o.Name, ref zh, ref en);
+                        TallyField(dict, fileName, "Description", o.Description, ref zh, ref en);
                     }
                 }
             }
-            return false;
+            // 失效：曾译过（zh>0）且英文可译字段不比中文少（en>=zh）——内容已「以英文为主」地还原。
+            // 绝大部分已译好的模组（中文远多于英文）不会被误清。
+            return zh > 0 && en >= zh;
         }
         catch (Exception)
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 统计单个字段：已中文 → zh++；英文且词典可译（疑似还原）→ en++；
+    /// 其余（英文但词典暂不可译 / 黑名单专名 / 空）不计入任一方，避免误判。
+    /// </summary>
+    private static void TallyField(DictionaryService dict, string fileName, string field, string text, ref int zh, ref int en)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (dict.ContainsChinese(text)) { zh++; return; }
+        if (AwaitsTranslation(dict, fileName, field, text)) en++;
     }
 
     /// <summary>

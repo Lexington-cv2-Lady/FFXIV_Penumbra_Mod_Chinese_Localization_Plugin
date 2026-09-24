@@ -21,26 +21,39 @@ public sealed class ModFileService
         if (!Directory.Exists(modDirPath)) return result;
 
         var meta = Path.Combine(modDirPath, "meta.json");
+        var hasFv4Meta = false;
         if (File.Exists(meta))
         {
             var info = ParseMeta(meta);
-            if (info != null) result.Add(info);
+            if (info != null)
+            {
+                result.Add(info);
+                // FV4（顶层 Groups）模组：meta.json 已是完整且权威的单一数据源，
+                // 旧格式遗留的 group_*.json 在 Penumbra FV4 下被忽略，纯属冗余。
+                // 跳过它们可避免重复翻译、并杜绝延续历史遗留的「同名不同分隔符」重复文件。
+                if (!info.MetaWrapped) hasFv4Meta = true;
+            }
         }
 
-        foreach (var f in Directory.GetFiles(modDirPath, "group_*.json").OrderBy(x => x, StringComparer.Ordinal))
+        // 仅当模组不是 FV4（无顶层 Groups 的 meta，或完全没有 meta）时，
+        // 才处理旧格式 group_*.json（它们是这类模组的唯一/主要翻译来源）。
+        if (!hasFv4Meta)
         {
-            // 跳过乱码文件名（替换符/代理区）：这类是同一中文名的编码损坏副本，读写/备份都会造成污染
-            var name = Path.GetFileName(f);
-            if (name.IndexOf('\uFFFD') >= 0) continue;
-            var hasSurrogate = false;
-            foreach (var c in name)
+            foreach (var f in Directory.GetFiles(modDirPath, "group_*.json").OrderBy(x => x, StringComparer.Ordinal))
             {
-                if (char.IsSurrogate(c)) { hasSurrogate = true; break; }
-            }
-            if (hasSurrogate) continue;
+                // 跳过乱码文件名（替换符/代理区）：这类是同一中文名的编码损坏副本，读写/备份都会造成污染
+                var name = Path.GetFileName(f);
+                if (name.IndexOf('\uFFFD') >= 0) continue;
+                var hasSurrogate = false;
+                foreach (var c in name)
+                {
+                    if (char.IsSurrogate(c)) { hasSurrogate = true; break; }
+                }
+                if (hasSurrogate) continue;
 
-            var info = ParseGroup(f);
-            if (info != null) result.Add(info);
+                var info = ParseGroup(f);
+                if (info != null) result.Add(info);
+            }
         }
 
         return result;

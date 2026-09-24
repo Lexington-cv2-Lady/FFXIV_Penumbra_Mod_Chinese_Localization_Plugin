@@ -65,7 +65,7 @@ public class DevWindow : Window, IDisposable
                 : "未发现失效标记（所有标记与内容一致）";
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("扫描全部模组：有「已翻译」标记但内容已还原成英文（词典有译文却仍是英文）的，清除其标记、回到未翻译列表。");
+            ImGui.SetTooltip("扫描全部模组：有「已翻译」标记、但内容已「以英文为主」地还原（英文且词典可译的字段数 ≥ 已中文字段数，且曾译过）的，才清除其标记；绝大部分已译好的模组不会被误清。");
 
         ImGui.Spacing();
         Plugin.ResultBox("##DevResult", _result, "校验结果将显示在这里");
