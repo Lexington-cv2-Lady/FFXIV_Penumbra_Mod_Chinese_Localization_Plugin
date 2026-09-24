@@ -96,7 +96,7 @@ public sealed class Plugin : IDalamudPlugin
         AppLog = new AppLog(Path.Combine(PluginInterface.GetPluginConfigDirectory(), "汉化日志.log"));
         Penumbra = new PenumbraService(PluginInterface, AppLog);
         Dict = new DictionaryService(AppLog);
-        ModFiles = new ModFileService { MaxBackups = Configuration.BackupCount };
+        ModFiles = new ModFileService { MaxBackups = Configuration.BackupCount, Log = AppLog };
         Snapshot = new EnglishSnapshotService(() => Configuration.DictionaryPath);
         Hanhua = new HanhuaService(Penumbra, Dict, ModFiles, Snapshot, AppLog);
         Mark = new MarkService(() => Penumbra.GetModRoot() ?? "");
@@ -185,8 +185,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch { /* 自愈失败不阻断启动 */ }
         // 启动清理：删除独立版遗留的旧 .json.bak 垃圾备份（时间戳格式按份数轮转保留）
-        ModFileService.CleanupLegacyBak(Penumbra.GetModRoot(), Configuration.TranslationPath, Configuration.DictionaryPath,
-            Math.Max(1, Configuration.BackupCount), AppLog.Warn);
+        ModFiles.CleanupLegacyBak(Penumbra.GetModRoot(), Configuration.TranslationPath, Configuration.DictionaryPath,
+            Math.Max(1, Configuration.BackupCount));
         Log.Information("FFXIV_penumbra的模组汉化插件 已加载");
     }
 

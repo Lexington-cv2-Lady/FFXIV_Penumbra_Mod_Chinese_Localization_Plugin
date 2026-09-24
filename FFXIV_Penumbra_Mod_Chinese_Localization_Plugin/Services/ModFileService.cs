@@ -14,6 +14,9 @@ public sealed class ModFileService
     /// <summary> 备份轮转保留份数（可配置）。 </summary>
     public int MaxBackups { get; set; } = 5;
 
+    /// <summary> 可选日志出口：删除 / 轮转 / 清理失败时记一行（为 null 则静默跳过）。 </summary>
+    public AppLog? Log { get; set; }
+
     /// <summary> 扫描模组目录，返回全部可汉化文件（meta.json + group_*.json）。跳过乱码文件名的副本。 </summary>
     public List<ModFileInfo> ReadModFiles(string modDirPath)
     {
@@ -148,9 +151,7 @@ public sealed class ModFileService
     /// 时间戳格式 *.json.bak_YYYYMMDD_HHMMSS 按前缀分组、每组只保留最新 maxBackups 份。
     /// penumbra 根目录递归，翻译/词典目录只扫顶层。失败的文件跳过（不中断），但会通过 warn 记一行日志。
     /// </summary>
-    /// <param name="warn">失败时的落日志回调（通常传 AppLog.Warn）。为 null 则只跳过不记。</param>
-    public static void CleanupLegacyBak(string? penumbraRoot, string? translationDir, string? dictionaryDir, int maxBackups,
-        Action<string>? warn = null)
+    public void CleanupLegacyBak(string? penumbraRoot, string? translationDir, string? dictionaryDir, int maxBackups)
     {
         var dirs = new[] { penumbraRoot, translationDir, dictionaryDir };
         for (var i = 0; i < dirs.Length; i++)
@@ -163,12 +164,12 @@ public sealed class ModFileService
             foreach (var f in Directory.GetFiles(dir, "*.json.bak", search))
             {
                 try { File.Delete(f); }
-                catch (Exception ex) { warn?.Invoke($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
+                catch (Exception ex) { Log?.Warn($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
             }
             foreach (var f in Directory.GetFiles(dir, "*.json.bak2", search))
             {
                 try { File.Delete(f); }
-                catch (Exception ex) { warn?.Invoke($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
+                catch (Exception ex) { Log?.Warn($"[清理] 删除旧格式备份失败（已跳过）：{f} - {ex.Message}"); }
             }
 
             // 2) 时间戳格式 .json.bak_*：按前缀分组，每组保留最新 maxBackups 份
@@ -180,13 +181,13 @@ public sealed class ModFileService
                     foreach (var old in g.OrderByDescending(x => x, StringComparer.Ordinal).Skip(maxBackups))
                     {
                         try { File.Delete(old); }
-                        catch (Exception ex) { warn?.Invoke($"[清理] 轮转删除旧备份失败（已跳过）：{old} - {ex.Message}"); }
+                        catch (Exception ex) { Log?.Warn($"[清理] 轮转删除旧备份失败（已跳过）：{old} - {ex.Message}"); }
                     }
                 }
             }
             catch (Exception ex)
             {
-                warn?.Invoke($"[清理] 枚举旧备份失败（跳过该目录）：{dir} - {ex.Message}");
+                Log?.Warn($"[清理] 枚举旧备份失败（跳过该目录）：{dir} - {ex.Message}");
             }
         }
     }
@@ -219,7 +220,8 @@ public sealed class ModFileService
                 .ToList();
             foreach (var old in all.Skip(maxBackups))
             {
-                try { File.Delete(old); } catch { /* 忽略删除失败 */ }
+                try { File.Delete(old); }
+                catch (Exception ex) { Log?.Warn($"[备份] 轮转删除旧备份失败（已跳过）：{old} - {ex.Message}"); }
             }
             return zipPath;
         }
