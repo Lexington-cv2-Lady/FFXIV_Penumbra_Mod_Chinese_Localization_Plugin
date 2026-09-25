@@ -190,11 +190,15 @@ public sealed class Plugin : IDalamudPlugin
         Log.Information("FFXIV_penumbra的模组汉化插件 已加载");
     }
 
-    /// <summary> 带边框的结果/日志显示区（全插件统一风格：边框 Child + 自动换行，高 56px）。 </summary>
-    internal static void ResultBox(string id, string text, string? placeholder = null, float height = 56f)
+    /// <summary> 带边框的结果/日志显示区（全插件统一风格：边框 Child + 自动换行，高 56px）。
+    /// autoScroll=true 时：用户已停在底部（贴近 ScrollMaxY）才自动跟随到底；用户手动上滑看历史时不强制下滚，避免抢滚动条。</summary>
+    internal static void ResultBox(string id, string text, string? placeholder = null, float height = 56f, bool autoScroll = false)
     {
         if (ImGui.BeginChild(id, new Vector2(-1f, height), true))
         {
+            // 是否跟随底部：仅在「当前已停在底部（贴近 ScrollMaxY）」时才下滚；
+            // 用户上滑查看历史（GetScrollY < ScrollMaxY）时不抢滚动条。
+            var stickToBottom = autoScroll && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 1.0f;
             if (!string.IsNullOrEmpty(text))
             {
                 ImGui.TextWrapped(text);
@@ -203,6 +207,7 @@ public sealed class Plugin : IDalamudPlugin
             {
                 ImGui.TextDisabled(placeholder);
             }
+            if (stickToBottom) ImGui.SetScrollHereY(1.0f);
         }
         ImGui.EndChild();
     }

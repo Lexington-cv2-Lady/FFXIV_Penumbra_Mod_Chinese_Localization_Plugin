@@ -133,9 +133,10 @@ public class WikiExportWindow : Window, IDisposable
 
         ImGui.Spacing();
 
-        // 日志结果区：带边框统一风格；高度自适应（矮窗口收缩，最高 200）
+        // 日志结果区：带边框统一风格；高度自适应（矮窗口收缩，最高 200）。默认自动跟随底部，
+        // 但用户手动上滑看历史时不抢滚动条（ResultBox 内部按是否贴底判定）。
         var boxH = Math.Min(200f, Math.Max(100f, ImGui.GetContentRegionAvail().Y));
-        Plugin.ResultBox("##WikiResult", _result, "提取日志将显示在这里（进度 / 新增 / 命中已有 / 拒绝数…）", boxH);
+        Plugin.ResultBox("##WikiResult", _result, "提取日志将显示在这里（进度 / 新增 / 命中已有 / 拒绝数…）", boxH, true);
 
         // 轮询任务完成
         if (_task != null && _task.IsCompleted)

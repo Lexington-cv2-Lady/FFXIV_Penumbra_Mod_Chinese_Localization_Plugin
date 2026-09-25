@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -38,15 +39,86 @@ public sealed class WikiExportService
     private readonly AppLog _log;
     private readonly HttpClient _http;
 
+    /// <summary> 抓取用 UA（curl 与 HttpClient 共用）。 </summary>
+    private const string UserAgentValue = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua";
+
     public string LastResult { get; private set; } = "";
 
     public WikiExportService(AppLog log)
     {
         _log = log;
         _http = new HttpClient();
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentValue);
         _http.Timeout = TimeSpan.FromSeconds(30);
     }
+
+    /// <summary>
+    /// 取数据页正文。灰机 wiki 的 CDN 是 Cloudflare，按 TLS 握手指纹（JA3/JA4）给请求打分：
+    /// .NET 的 SChannel 指纹会被风控挑战拦成 403 挑战页（curl/浏览器指纹则放行）。
+    /// 故优先调用系统自带 curl.exe 取数，被拦/不可用时退回 HttpClient 兜底。
+    /// </summary>
+    private async Task<string?> FetchAsync(string url, CancellationToken ct)
+    {
+        var viaCurl = await TryCurlAsync(url, ct).ConfigureAwait(false);
+        if (viaCurl != null)
+            return viaCurl;
+        try
+        {
+            return await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary> 用系统自带 curl.exe 抓取（返回正文；curl 缺失/失败返回 null）。 </summary>
+    private static async Task<string?> TryCurlAsync(string url, CancellationToken ct)
+    {
+        Process? proc = null;
+        try
+        {
+            var psi = new ProcessStartInfo("curl.exe")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                // curl 输出为 UTF-8；不显式指定则 .NET 默认按系统 ANSI 码页（中文系统 GBK）解码，
+                // 会把多字节中文错解成乱码并撑坏 JSON 结构（"':' is invalid after a value"）。
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-s");
+            psi.ArgumentList.Add("--max-time");
+            psi.ArgumentList.Add("30");
+            psi.ArgumentList.Add("-A");
+            psi.ArgumentList.Add(UserAgentValue);
+            psi.ArgumentList.Add(url);
+            proc = Process.Start(psi);
+            if (proc == null) return null;
+            var outTask = proc.StandardOutput.ReadToEndAsync(ct);
+            var errTask = proc.StandardError.ReadToEndAsync(ct); // 并发读，避免 stderr 写满导致死锁
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+            var stdout = await outTask.ConfigureAwait(false);
+            _ = await errTask.ConfigureAwait(false);
+            if (proc.ExitCode != 0) return null;
+            return string.IsNullOrEmpty(stdout) ? null : stdout;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            try { proc?.Dispose(); } catch { /* 释放进程句柄失败可忽略 */ }
+        }
+    }
+
+    /// <summary> 判断是否拿到的是 Cloudflare 风控挑战页（非 JSON）。 </summary>
+    private static bool IsCloudflareChallenge(string body)
+        => body.Contains("_cf_chl_opt") || body.Contains("challenges.cloudflare") ||
+           body.Contains("请稍候");
 
     /// <summary> 动作/答语类噪音词条：百科语义与选项语义冲突，拒绝入库。 </summary>
     private static readonly HashSet<string> NoiseTerms = new(StringComparer.OrdinalIgnoreCase)
@@ -134,19 +206,26 @@ public sealed class WikiExportService
                     if (gapCont.Length > 0) url += "&gapcontinue=" + Uri.EscapeDataString(gapCont);
                     if (rvCont.Length > 0) url += "&rvcontinue=" + Uri.EscapeDataString(rvCont);
 
-                    string resp;
-                    try
-                    {
-                        resp = await _http.GetStringAsync(url, ct);
-                    }
-                    catch (OperationCanceledException)
+                    string? resp;
+                    if (ct.IsCancellationRequested)
                     {
                         cancelled = true;
                         break;
                     }
-                    catch (Exception ex)
+                    resp = await FetchAsync(url, ct).ConfigureAwait(false);
+                    if (resp == null)
                     {
-                        log?.Invoke($"[错误] 获取数据页失败（{prefix}）：{ex.Message}");
+                        if (ct.IsCancellationRequested)
+                        {
+                            cancelled = true;
+                            break;
+                        }
+                        log?.Invoke($"[错误] 获取数据页失败（{prefix}）：网络请求失败（curl 与内置 HttpClient 均未取到数据）");
+                        break;
+                    }
+                    if (IsCloudflareChallenge(resp))
+                    {
+                        log?.Invoke($"[错误] {prefix} 被 CDN 风控拦截（Cloudflare 验证页，非数据）；请稍后或切换网络/代理后重试");
                         break;
                     }
 
@@ -161,7 +240,8 @@ public sealed class WikiExportService
                     }
                     if (j == null)
                     {
-                        log?.Invoke($"[错误] 数据页解析失败（{prefix}）");
+                        var snip = (resp.Length > 200 ? resp[..200] : resp).Replace("\n", " ").Replace("\r", " ");
+                        log?.Invoke($"[错误] 数据页解析失败（{prefix}）：非 JSON 响应，开头：{snip}");
                         break;
                     }
                     if (j.ContainsKey("error"))
