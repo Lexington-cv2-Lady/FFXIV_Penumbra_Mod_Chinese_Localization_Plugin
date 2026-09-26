@@ -115,11 +115,6 @@ public sealed class WikiExportService
         }
     }
 
-    /// <summary> 判断是否拿到的是 Cloudflare 风控挑战页（非 JSON）。 </summary>
-    private static bool IsCloudflareChallenge(string body)
-        => body.Contains("_cf_chl_opt") || body.Contains("challenges.cloudflare") ||
-           body.Contains("请稍候");
-
     /// <summary> 动作/答语类噪音词条：百科语义与选项语义冲突，拒绝入库。 </summary>
     private static readonly HashSet<string> NoiseTerms = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -223,7 +218,7 @@ public sealed class WikiExportService
                         log?.Invoke($"[错误] 获取数据页失败（{prefix}）：网络请求失败（curl 与内置 HttpClient 均未取到数据）");
                         break;
                     }
-                    if (IsCloudflareChallenge(resp))
+                    if (CloudflareChallengeDetector.IsChallenge(resp))
                     {
                         log?.Invoke($"[错误] {prefix} 被 CDN 风控拦截（Cloudflare 验证页，非数据）；请稍后或切换网络/代理后重试");
                         break;
