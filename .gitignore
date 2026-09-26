@@ -22,3 +22,17 @@ TestResults/
 
 # 项目私有记忆（属项目资产，不入库）
 .workbuddy/
+
+# 构建 / DalamudPackager 输出到仓库根目录的产物（每次构建重新生成，入库只会污染 diff）
+# ⚠ 均带前导 "/" 限定仓库根目录，不误伤子目录同名文件。
+# 注：FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.json 是 packager 生成的插件 manifest（非手写源），
+#     发布走打包 zip，无需入库。
+/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.dll
+/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.deps.json
+/FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.json
+# 根目录拷贝进来的依赖 dll（构建输出，非源）
+/*.dll
+# Windows 保留设备名误建的文件（Shell 里 2>nul 在 Git Bash 下会被当成文件名创建，无法常规删除）
+/nul
+# 审查方放入的副本类文档（非项目源，避免误提交对话/审查文案）
+*副本*.md
