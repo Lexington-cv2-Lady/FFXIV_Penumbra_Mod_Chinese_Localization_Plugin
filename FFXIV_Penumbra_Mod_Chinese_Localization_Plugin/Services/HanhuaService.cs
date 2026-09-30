@@ -54,9 +54,9 @@ public sealed class HanhuaService
             return 0;
         }
 
-        // 翻译前：整个模组打 zip 备份（yyyy-MM-dd_HH-mm-ss备份.zip），失败则跳过写回
+        // 翻译前：整个模组打 zip 备份（「词典翻译备份_时间戳.zip」），失败则跳过写回
         var maxBackups = _files.MaxBackups;
-        var zipBackup = _files.CreateModZip(modPath, maxBackups);
+        var zipBackup = _files.CreateModZip(modPath, maxBackups, "词典翻译备份");
         if (zipBackup == null)
         {
             LastResult = "备份失败，已跳过写回（无 meta.json / group_*.json 或打包异常）";

@@ -111,7 +111,7 @@ public class BackupWindow : Window, IDisposable
         var allBackups = _backupsCache;
 
         // 顶部说明
-        ImGui.TextWrapped($"备份文件：yyyy-MM-dd_HH-mm-ss备份.zip（每个模组一个 zip，自动备份轮转保留 {_plugin.Configuration.BackupCount} 份）");
+        ImGui.TextWrapped($"备份文件：{{操作名}}_yyyy-MM-dd_HH-mm-ss.zip（每个模组一个 zip，自动备份轮转保留 {_plugin.Configuration.BackupCount} 份）");
         Ui.Hint($"全库共 {allBackups.Count} 个备份文件，涉及 {allBackups.Select(b => b.ModDir).Distinct().Count()} 个模组；旧 .json.bak_* 仍可识别还原");
         ImGui.Spacing();
         ImGui.Separator();

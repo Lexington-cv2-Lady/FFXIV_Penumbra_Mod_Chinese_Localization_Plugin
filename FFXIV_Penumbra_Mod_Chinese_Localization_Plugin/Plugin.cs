@@ -361,7 +361,7 @@ public sealed class Plugin : IDalamudPlugin
                 if (HasRecoverableText(modDir))
                 {
                     // 仅对该模组离线重覆盖（不调 AI、不联网；只改文本）
-                    var written = Import.ApplyDictionary(root, Dict, new[] { mod }, overwrite: false);
+                    var written = Import.ApplyDictionary(root, Dict, new[] { mod }, overwrite: false, backupSource: "更新重覆盖备份");
                     _sigTracker.SetBaseline(key, ComputeModSig(modDir)); // 写回后签名已变，同步基线避免反复触发
                     if (written > 0)
                         AppLog.Info($"[更新重覆盖] 已用离线词典回填 {mod.Name}（{written} 项；选项启用/选择状态未动）");

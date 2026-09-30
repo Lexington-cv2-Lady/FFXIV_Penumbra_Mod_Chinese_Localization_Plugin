@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using Microsoft.VisualBasic.FileIO;
 
 namespace FFXIVPenumbraHanhua.Services;
 
@@ -148,7 +151,8 @@ public sealed class ModFileService
 
     /// <summary>
     /// 启动清理：删除旧格式 .json.bak / .json.bak2（独立版遗留的完整备份），
-    /// 时间戳格式 *.json.bak_YYYYMMDD_HHMMSS 按前缀分组、每组只保留最新 maxBackups 份。
+    /// 时间戳格式 *.json.bak_YYYYMMDD_HHMMSS 按前缀分组、每组只保留最新 maxBackups 份；
+    /// 并清理冗余双后缀 *.json.json（去末尾 .json 后原文件存在者，移回收站）。
     /// penumbra 根目录递归，翻译/词典目录只扫顶层。失败的文件跳过（不中断），但会通过 warn 记一行日志。
     /// </summary>
     public void CleanupLegacyBak(string? penumbraRoot, string? translationDir, string? dictionaryDir, int maxBackups)
@@ -158,7 +162,7 @@ public sealed class ModFileService
         {
             var dir = dirs[i];
             if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) continue;
-            var search = i == 0 ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var search = i == 0 ? System.IO.SearchOption.AllDirectories : System.IO.SearchOption.TopDirectoryOnly;
 
             // 1) 旧格式完整备份 .json.bak / .json.bak2：直接删除
             foreach (var f in Directory.GetFiles(dir, "*.json.bak", search))
@@ -189,14 +193,38 @@ public sealed class ModFileService
             {
                 Log?.Warn($"[清理] 枚举旧备份失败（跳过该目录）：{dir} - {ex.Message}");
             }
+
+            // 3) 冗余双后缀 *.json.json（如 meta.json.json）：去掉最后一个 .json 后原文件存在 -> 判定为冗余副本，移回收站
+            //    背景：这类文件是同一份内容（同 Identifier）的「转义版」副本，插件与 Penumbra 都不读取，纯占空间。
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(dir, "*.json.json", search))
+                {
+                    if (!Path.GetFileName(f).EndsWith(".json.json", StringComparison.OrdinalIgnoreCase)) continue;
+                    var orig = f[..^".json".Length];
+                    if (!File.Exists(orig)) continue; // 原文件不在，保守保留，不误删
+                    try
+                    {
+                        FileSystem.DeleteFile(f, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+                        Log?.Info($"[清理] 已清理冗余双后缀文件（移至回收站）：{f}");
+                    }
+                    catch (Exception ex) { Log?.Warn($"[清理] 清理冗余双后缀失败（已跳过）：{f} - {ex.Message}"); }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log?.Warn($"[清理] 枚举冗余双后缀失败（跳过该目录）：{dir} - {ex.Message}");
+            }
         }
     }
 
     /// <summary>
-    /// 创建模组 zip 备份（独立版格式：yyyy-MM-dd_HH-mm-ss备份.zip，内含 meta.json + group_*.json）。
-    /// 轮转：同目录 *备份.zip 只保留最新 maxBackups 份。返回 zip 路径，失败返回 null。
+    /// 创建模组 zip 备份，命名「{来源}_{yyyy-MM-dd_HH-mm-ss}.zip」（如「后台汉化备份_2026-09-30_12-00-00.zip」），
+    /// 内含 meta.json + group_*.json，压缩等级取最高（SmallestSize，无损）。
+    /// 轮转：同目录全部备份 zip（兼容旧命名「时间戳备份.zip」）按时间只保留最新 maxBackups 份。返回 zip 路径，失败返回 null。
     /// </summary>
-    public string? CreateModZip(string modDirPath, int maxBackups)
+    /// <param name="source">备份来源名（用于区分是哪个操作触发的备份，如「自动备份」「后台汉化备份」）。</param>
+    public string? CreateModZip(string modDirPath, int maxBackups, string source = "备份")
     {
         try
         {
@@ -205,18 +233,23 @@ public sealed class ModFileService
             if (files.Count == 0) return null;
 
             var stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-            var zipPath = Path.Combine(modDirPath, $"{stamp}备份.zip");
+            var zipPath = Path.Combine(modDirPath, $"{SanitizeSource(source)}_{stamp}.zip");
             using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
             {
                 foreach (var f in files)
                 {
-                    zip.CreateEntryFromFile(f.Path, Path.GetFileName(f.Path));
+                    // SmallestSize：最高压缩等级、无损；对 json 文本收益明显
+                    var entry = zip.CreateEntry(Path.GetFileName(f.Path), CompressionLevel.SmallestSize);
+                    using var es = entry.Open();
+                    using var fs = File.OpenRead(f.Path);
+                    fs.CopyTo(es);
                 }
             }
 
-            // 轮转：只保留最新 maxBackups 份 zip（文件名时间格式按字典序即时间序）
-            var all = Directory.GetFiles(modDirPath, "*备份.zip")
-                .OrderByDescending(x => x, StringComparer.Ordinal)
+            // 轮转：只保留最新 maxBackups 份备份 zip（按解析出的时间排序；不能按文件名，因新命名来源名在前）
+            var all = Directory.EnumerateFiles(modDirPath)
+                .Where(x => IsBackupZip(Path.GetFileName(x)))
+                .OrderByDescending(x => BackupTime(Path.GetFileName(x)) ?? DateTime.MinValue)
                 .ToList();
             foreach (var old in all.Skip(maxBackups))
             {
@@ -229,6 +262,39 @@ public sealed class ModFileService
         {
             return null;
         }
+    }
+
+    /// <summary> 备份来源名净化：替换文件名非法字符，空则回退「备份」。 </summary>
+    private static string SanitizeSource(string source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return "备份";
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder();
+        foreach (var c in source)
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+        var s = sb.ToString().Trim();
+        return s.Length == 0 ? "备份" : s;
+    }
+
+    // 新命名：{来源}_{时间戳}.zip；旧命名：{时间戳}备份.zip
+    private static readonly Regex NewBakName = new(
+        @"^(?<src>.+)_(?<ts>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.zip$", RegexOptions.Compiled);
+    private static readonly Regex OldBakName = new(
+        @"^(?<ts>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})备份\.zip$", RegexOptions.Compiled);
+
+    /// <summary> 是否为备份 zip（兼容新命名「来源_时间戳.zip」与旧命名「时间戳备份.zip」）。 </summary>
+    public static bool IsBackupZip(string fileName)
+        => OldBakName.IsMatch(fileName) || NewBakName.IsMatch(fileName);
+
+    /// <summary> 从备份文件名解析时间（解析失败返回 null）。 </summary>
+    public static DateTime? BackupTime(string fileName)
+    {
+        var m = OldBakName.Match(fileName);
+        if (!m.Success) m = NewBakName.Match(fileName);
+        if (!m.Success) return null;
+        return DateTime.TryParseExact(m.Groups["ts"].Value, "yyyy-MM-dd_HH-mm-ss",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var t) ? t : (DateTime?)null;
     }
 
     /// <summary> 写回翻译：把组的 Name/Description、选项的 Name/Description 改为中文。 </summary>

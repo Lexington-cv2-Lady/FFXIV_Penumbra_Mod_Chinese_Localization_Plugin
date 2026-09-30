@@ -179,6 +179,7 @@ public sealed class WikiExportService
             foreach (var prefix in prefixes)
             {
                 var type = prefix.TrimEnd('/');
+                var disp = CategoryFileNameZh(DisplayOf(type));
                 var cur = catResults[type];
                 var api = "https://cdn.huijiwiki.com/ff14/api.php?action=query&generator=allpages&format=json&utf8=1" +
                           "&gaplimit=500&prop=revisions&rvprop=content&rvslots=main&gapnamespace=3500&gapprefix=" +
@@ -188,7 +189,7 @@ public sealed class WikiExportService
                 var done = false;
                 var catPages = 0;
                 var catLogged = 0; // 已记录进度时的页数（按累计值每 100 页记一次，与单次响应批量大小无关）
-                log?.Invoke($"[提示] 开始抓取 {prefix} ...");
+                log?.Invoke($"[提示] 开始抓取 {disp} ...");
 
                 while (!done)
                 {
@@ -215,12 +216,12 @@ public sealed class WikiExportService
                             cancelled = true;
                             break;
                         }
-                        log?.Invoke($"[错误] 获取数据页失败（{prefix}）：网络请求失败（curl 与内置 HttpClient 均未取到数据）");
+                        log?.Invoke($"[错误] 获取数据页失败（{disp}）：网络请求失败（curl 与内置 HttpClient 均未取到数据）");
                         break;
                     }
                     if (CloudflareChallengeDetector.IsChallenge(resp))
                     {
-                        log?.Invoke($"[错误] {prefix} 被 CDN 风控拦截（Cloudflare 验证页，非数据）；请稍后或切换网络/代理后重试");
+                        log?.Invoke($"[错误] {disp} 被 CDN 风控拦截（Cloudflare 验证页，非数据）；请稍后或切换网络/代理后重试");
                         break;
                     }
 
@@ -236,7 +237,7 @@ public sealed class WikiExportService
                     if (j == null)
                     {
                         var snip = (resp.Length > 200 ? resp[..200] : resp).Replace("\n", " ").Replace("\r", " ");
-                        log?.Invoke($"[错误] 数据页解析失败（{prefix}）：非 JSON 响应，开头：{snip}");
+                        log?.Invoke($"[错误] 数据页解析失败（{disp}）：非 JSON 响应，开头：{snip}");
                         break;
                     }
                     if (j.ContainsKey("error"))
@@ -294,7 +295,7 @@ public sealed class WikiExportService
                     if (catPages - catLogged >= 100)
                     {
                         catLogged = catPages;
-                        log?.Invoke($"[进度] {type} 已处理 {catPages} 页，新增 {added} 条（命中已有 {hitExisting}，跳过）");
+                        log?.Invoke($"[进度] {disp} 已处理 {catPages} 页，新增 {added} 条（命中已有 {hitExisting}，跳过）");
                     }
                 }
             }

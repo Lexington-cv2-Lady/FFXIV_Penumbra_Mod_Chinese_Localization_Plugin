@@ -929,8 +929,9 @@ public class MainWindow : Window, IDisposable
     /// 一键汉化（智能分流）：① 提取（默认汇总提取，可选按模组）-> ② 词典预填 ->
     /// 有 Key：③ AI 翻译 -> ④ 汇总 -> ⑤ 写回；无 Key：停在 ②，引导走外部 AI 后用「汇总并写入」。
     /// mods 可以是单个模组（详情区）也可以是当前列表全部（未选中时的“一键汉化（伪）”）。
+    /// backupSource：写回前备份的来源名——手动点按钮为「一键汉化备份」，后台自动触发为「后台汉化备份」。
     /// </summary>
-    private void StartOneClick(List<ModEntry> mods)
+    private void StartOneClick(List<ModEntry> mods, string backupSource = "一键汉化备份")
     {
         if (mods.Count == 0)
         {
@@ -1022,7 +1023,7 @@ public class MainWindow : Window, IDisposable
                 _ocStatus = "④ 汇总已翻译内容…";
                 SumupCore(transDir, log);
                 _ocStatus = "⑤ 翻译写入MOD…";
-                plugin.Import.ApplyDictionary(modRoot, plugin.Dict, mods);
+                plugin.Import.ApplyDictionary(modRoot, plugin.Dict, mods, backupSource: backupSource);
                 log.Append('\n').Append(plugin.Import.LastResult);
                 _ocStatus = "完成 ";
                 _result = log.ToString();
@@ -1078,7 +1079,7 @@ public class MainWindow : Window, IDisposable
             }
             plugin.AppLog.Info($"[全自动] 开始：{mods.Count} 个未翻译模组（提取->预填->AI->汇总->写回）");
             _ocSummary = true; // 全自动默认汇总提取（同原文跨模组天然去重友好）
-            StartOneClick(mods);
+            StartOneClick(mods, "后台汉化备份");
         }
         catch (Exception ex)
         {
@@ -1107,7 +1108,7 @@ public class MainWindow : Window, IDisposable
             _result = "未找到 _已翻译.json：请先把外部 AI 翻好的文件改名为 <名称>_已翻译.json 放回翻译目录。";
             return;
         }
-        plugin.Import.ApplyDictionary(modRoot, plugin.Dict, mods);
+        plugin.Import.ApplyDictionary(modRoot, plugin.Dict, mods, backupSource: "翻译写入备份");
         log.Append('\n').Append(plugin.Import.LastResult);
         penumbra.Refresh();
         ReloadSelectedFile();
@@ -1473,7 +1474,7 @@ public class MainWindow : Window, IDisposable
         void BackupNow()
         {
             _restoreStatus = "正在备份当前状态…";
-            var zip = plugin.Backup.CreateModZip(modFullPath, plugin.Configuration.BackupCount);
+            var zip = plugin.Backup.CreateModZip(modFullPath, plugin.Configuration.BackupCount, "还原前备份");
             if (zip == null) throw new InvalidOperationException("还原前备份失败，未改动任何文件");
         }
     }
@@ -1564,7 +1565,7 @@ public class MainWindow : Window, IDisposable
             // 先自动备份整个模组（zip），防翻车；备份失败则中止保存，与导入/还原路径一致
             var modDirPath = Path.GetDirectoryName(file.Path) ?? "";
             var modDirName = Path.GetFileName(modDirPath);
-            if (string.IsNullOrEmpty(modDirPath) || plugin.Backup.CreateModZip(modDirPath, plugin.Configuration.BackupCount) == null)
+            if (string.IsNullOrEmpty(modDirPath) || plugin.Backup.CreateModZip(modDirPath, plugin.Configuration.BackupCount, "选项编辑备份") == null)
             {
                 _result = "保存失败：备份当前模组失败，已中止保存（未改动任何文件）";
                 plugin.AppLog.Error($"[保存修改] {mod.Directory}/{file.FileName}：备份失败，已中止保存");

@@ -31,8 +31,10 @@ public sealed class ImportService
     /// 词典直写回（翻译写入MOD）：直接读取已加载的词典译文（我的翻译/个性翻译/wiki/AI知识库），
     /// 应用到指定模组的组名 / 选项名 / 描述，写回模组文件并重载。
     /// overwrite=false：已含中文的条目跳过；overwrite=true：已中文条目按英文快照重查词典，可覆写旧译法。
+    /// backupSource：写回前备份的来源名（用于区分是哪个操作触发的备份）。
     /// </summary>
-    public int ApplyDictionary(string modRoot, DictionaryService dict, IReadOnlyList<ModEntry> mods, bool overwrite = false)
+    public int ApplyDictionary(string modRoot, DictionaryService dict, IReadOnlyList<ModEntry> mods, bool overwrite = false,
+        string backupSource = "汉化备份")
     {
         if (string.IsNullOrEmpty(modRoot) || !Directory.Exists(modRoot))
         {
@@ -130,7 +132,7 @@ public sealed class ImportService
                 // 整个模组打 zip 备份一次（同一模组多文件只备一次）
                 if (!modBackedUp.Contains(mod.Directory))
                 {
-                    var zip = _files.CreateModZip(modDirPath, _files.MaxBackups);
+                    var zip = _files.CreateModZip(modDirPath, _files.MaxBackups, backupSource);
                     if (zip == null)
                     {
                         errors.Add(mod.Directory + "：备份失败，跳过写回");
@@ -138,6 +140,17 @@ public sealed class ImportService
                     }
                     modBackedUp.Add(mod.Directory);
                     totalBackups++;
+                }
+
+                // 写回前：文件仍为纯英文时存英文快照（与词典翻译写入/选项编辑保存/恢复备份对齐，
+                // 保证「选项编辑」右列英文参照在走「导入/一键汉化」路径后也存在）
+                try
+                {
+                    _snapshot.SaveIfEnglish(mod.Directory, fileInfo.FileName, File.ReadAllText(fileInfo.Path));
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn($"[导入] {mod.Directory}/{fileInfo.FileName}：英文快照保存失败（覆写功能可能受影响）：{ex.Message}");
                 }
 
                 if (_files.WriteTranslation(fileInfo.Path, fileInfo, groupNames, optionNames, optionDescs))

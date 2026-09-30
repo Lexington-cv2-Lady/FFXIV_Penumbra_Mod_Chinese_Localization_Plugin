@@ -292,7 +292,7 @@ public class TranslatePipelineWindow : Window, IDisposable
                 }
                 else
                 {
-                    var n = _import.ApplyDictionary(modRoot ?? "", _dict, mods, overwrite: true);
+                    var n = _import.ApplyDictionary(modRoot ?? "", _dict, mods, overwrite: true, backupSource: "翻译写入备份");
                     _result = _import.LastResult;
                 }
             }

@@ -56,7 +56,7 @@ https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_
 - 读取 Penumbra 模组选项与描述（`meta.json` / `group_*.json`，兼容新旧双格式）
 - 词典汉化：我的翻译 / 个性翻译 / wiki 术语对照 / AI 知识库 / 单词黑名单
 - AI 翻译：内置多家国内主流服务商（按平台自动拆批与输出上限），也支持导出后交给外部 AI 翻译再汇总
-- 汉化前自动备份（zip 按份数轮转），可一键还原且保留 Penumbra 的选项状态
+- 汉化前自动备份（zip 按份数轮转，文件名含操作来源如「后台汉化备份_时间戳.zip」，便于分辨），可一键还原且保留 Penumbra 的选项状态
 - 纯中文输出、黑名单保留英文专名、「已翻译」标记自动跳过
 - 列表支持鼠标拖框多选，实时日志可落盘并一键打开
 

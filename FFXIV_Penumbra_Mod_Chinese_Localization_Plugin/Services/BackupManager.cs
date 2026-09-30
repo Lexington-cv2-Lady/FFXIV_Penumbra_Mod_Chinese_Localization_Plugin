@@ -10,7 +10,7 @@ using Penumbra.Api.Enums;
 
 namespace FFXIVPenumbraHanhua.Services;
 
-/// <summary> 备份管理：扫描模组备份（.json.bak_* 与独立版日期_时间备份.zip）、还原、删除（回收站）、手动备份。 </summary>
+/// <summary> 备份管理：扫描模组备份（.json.bak_* 与备份 zip「来源_时间戳.zip」）、还原、删除（回收站）、手动备份。 </summary>
 public sealed class BackupManager
 {
     private readonly ModFileService _files;
@@ -36,7 +36,7 @@ public sealed class BackupManager
         _mark = mark;
     }
 
-    /// <summary> 扫描模组根目录下所有备份，按时间新->旧。识别：.json.bak_yyyyMMdd_HHmmss 与 yyyy-MM-dd_HH-mm-ss备份.zip。 </summary>
+    /// <summary> 扫描模组根目录下所有备份，按时间新->旧。识别：.json.bak_yyyyMMdd_HHmmss，以及备份 zip（新「来源_时间戳.zip」/旧「时间戳备份.zip」）。 </summary>
     public List<BackupInfo> ListBackups(string modRoot)
     {
         var list = new List<BackupInfo>();
@@ -49,14 +49,13 @@ public sealed class BackupManager
                 foreach (var f in Directory.EnumerateFiles(dir))
                 {
                     var name = Path.GetFileName(f);
-                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && name.Contains("备份"))
+                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && ModFileService.IsBackupZip(name))
                     {
-                        // 独立版 zip：2026-09-11_03-04-01备份.zip
-                        var head = name.Replace("备份.zip", "", StringComparison.OrdinalIgnoreCase);
-                        if (DateTime.TryParseExact(head, "yyyy-MM-dd_HH-mm-ss", null,
-                                System.Globalization.DateTimeStyles.None, out var zt))
+                        // 备份 zip：新「来源_2026-09-30_12-00-00.zip」/ 旧「2026-09-11_03-04-01备份.zip」
+                        var zt = ModFileService.BackupTime(name);
+                        if (zt.HasValue)
                         {
-                            list.Add(new BackupInfo(modDir, name, f, zt, true));
+                            list.Add(new BackupInfo(modDir, name, f, zt.Value, true));
                         }
                     }
                     else if (name.Contains(".json.bak_"))
@@ -177,8 +176,8 @@ public sealed class BackupManager
             {
                 var dir = Path.Combine(modRoot, m.Directory);
                 if (!Directory.Exists(dir)) continue;
-                if (Directory.GetFiles(dir, "*备份.zip").Length > 0) continue;
-                if (CreateModZip(dir, maxBackups) != null) n++;
+                if (HasAnyBackupZip(dir)) continue;
+                if (CreateModZip(dir, maxBackups, "自动备份") != null) n++;
                 else noContent++; // 无选项内容的模组：正常跳过（不记错误，仅汇总为一条提示）
             }
             catch
@@ -201,8 +200,8 @@ public sealed class BackupManager
         {
             var dir = Path.Combine(modRoot, modDirectory);
             if (!Directory.Exists(dir)) return;
-            if (Directory.GetFiles(dir, "*备份.zip").Length > 0) return;
-            if (CreateModZip(dir, maxBackups) != null)
+            if (HasAnyBackupZip(dir)) return;
+            if (CreateModZip(dir, maxBackups, "新模组备份") != null)
                 _log.Info($"[自动备份] 新模组 {modDirectory} 已自动备份");
         }
         catch
@@ -211,23 +210,27 @@ public sealed class BackupManager
         }
     }
 
-    /// <summary> 手动备份模组全部文件为 zip（yyyy-MM-dd_HH-mm-ss备份.zip），轮转保留 maxBackups 份。返回备份数（0/1）。 </summary>
+    /// <summary> 手动备份模组全部文件为 zip（「手动备份_时间戳.zip」），轮转保留 maxBackups 份。返回备份数（0/1）。 </summary>
     public int ManualBackup(string modDirPath, int maxBackups)
     {
-        var zip = CreateModZip(modDirPath, maxBackups);
+        var zip = CreateModZip(modDirPath, maxBackups, "手动备份");
         return zip != null ? 1 : 0;
     }
 
-    /// <summary> 创建模组 zip 备份（含日志）。 </summary>
+    /// <summary> 该模组目录下是否已有任一备份 zip（新「来源_时间戳.zip」与旧「时间戳备份.zip」皆算）。 </summary>
+    private static bool HasAnyBackupZip(string dir)
+        => Directory.EnumerateFiles(dir).Any(x => ModFileService.IsBackupZip(Path.GetFileName(x)));
+
+    /// <summary> 创建模组 zip 备份（含日志）。source 为备份来源名（区分是哪个操作触发）。 </summary>
     /// <remarks>
     /// 无 meta.json Groups / group_*.json 的模组（纯文件替换类，如武器/动作替换）**本来就没有可备份的选项内容**，
     /// 属正常情况：静默返回 null、不记错误——否则每次启动扫描都会重试并记一条错误，刷屏并误导用户以为出故障。
     /// 只有「有内容却打包失败」才记错误。
     /// </remarks>
-    public string? CreateModZip(string modDirPath, int maxBackups)
+    public string? CreateModZip(string modDirPath, int maxBackups, string source = "备份")
     {
         if (_files.ReadModFiles(modDirPath).Count == 0) return null; // 无可备份内容：正常跳过，不记日志
-        var zip = _files.CreateModZip(modDirPath, maxBackups);
+        var zip = _files.CreateModZip(modDirPath, maxBackups, source);
         if (zip != null)
         {
             _log.Info($"[备份] 已创建 {Path.GetFileName(zip)}（{Path.GetFileName(modDirPath)}）");
