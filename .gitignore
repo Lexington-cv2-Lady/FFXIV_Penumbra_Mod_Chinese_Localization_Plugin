@@ -46,6 +46,9 @@ TestResults/
 /FFXIV_Penumbra_Mod_Chinese_Localization_Plugin.json
 # 根目录拷贝进来的依赖 dll（构建输出，非源）
 /*.dll
+# 遗留重复的图标副本（2026-09-12）：csproj 的图标源是 Data\icon.png（已入库），
+# 根目录这份不被任何 csproj/CI 引用，留着只会让人误以为图标有两份。确认无用后可删。
+/images/
 # Windows 保留设备名误建的文件（Shell 里 2>nul 在 Git Bash 下会被当成文件名创建，无法常规删除）
 /nul
 # 审查方放入的副本类文档（非项目源，避免误提交对话/审查文案）
