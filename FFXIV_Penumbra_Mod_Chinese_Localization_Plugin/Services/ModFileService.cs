@@ -83,6 +83,20 @@ public sealed class ModFileService
             if (groups == null) return null;
 
             var info = new ModFileInfo { Path = path, IsMeta = true, MetaWrapped = wrapped };
+            // FV4 多页面名（PageNames：{"0":"WAR","1":"DRK",...}，游戏内「页码」下拉显示的就是它）：
+            // 按页索引升序填入，缺失页留空串占位，保证索引对齐。
+            if (node["PageNames"] is JsonObject pn)
+            {
+                var idxs = new List<int>();
+                foreach (var kv in pn)
+                    if (int.TryParse(kv.Key, out var pi) && pi >= 0) idxs.Add(pi);
+                idxs.Sort();
+                foreach (var pi in idxs)
+                {
+                    while (info.PageNames.Count <= pi) info.PageNames.Add("");
+                    info.PageNames[pi] = pn[pi.ToString()]?.ToString() ?? "";
+                }
+            }
             var gi = 0;
             foreach (var g in groups.OfType<JsonObject>())
             {
@@ -297,9 +311,10 @@ public sealed class ModFileService
             System.Globalization.DateTimeStyles.None, out var t) ? t : (DateTime?)null;
     }
 
-    /// <summary> 写回翻译：把组的 Name/Description、选项的 Name/Description 改为中文。 </summary>
+    /// <summary> 写回翻译：把组的 Name/Description、选项的 Name/Description 改为中文；meta 文件还可更新 FV4 页面名。 </summary>
     public bool WriteTranslation(string filePath, ModFileInfo info, Dictionary<int, string> groupNames,
-        Dictionary<(int, int), string> optionNames, Dictionary<(int, int), string> optionDescs)
+        Dictionary<(int, int), string> optionNames, Dictionary<(int, int), string> optionDescs,
+        Dictionary<int, string>? pageNames = null)
     {
         try
         {
@@ -332,6 +347,17 @@ public sealed class ModFileService
                             }
                         }
                         gi++;
+                    }
+                }
+
+                // FV4 多页面名：仅当模组本就有 PageNames 节点时才更新对应页（不为无页面模组凭空造字段）
+                if (pageNames != null && pageNames.Count > 0 && node["PageNames"] is JsonObject pn)
+                {
+                    foreach (var kv in pageNames)
+                    {
+                        if (kv.Value.Length == 0) continue;
+                        var key = kv.Key.ToString();
+                        if (pn[key] != null) pn[key] = kv.Value;
                     }
                 }
             }
@@ -374,6 +400,10 @@ public sealed class ModFileInfo
     public bool MetaWrapped { get; init; }
 
     public List<ModGroup> Groups { get; } = new();
+
+    /// <summary> FV4 多页面名（meta.json 顶层 PageNames，按页索引顺序；空列表 = 该模组无页面名）。 </summary>
+    public List<string> PageNames { get; } = new();
+
     public string FileName => System.IO.Path.GetFileName(Path);
 }
 

@@ -55,6 +55,13 @@ internal sealed class ModSignatureTracker
     /// <summary> 清除某模组基线（模组已从磁盘消失时调用）。 </summary>
     public void RemoveBaseline(string key) => _baseline.TryRemove(key, out _);
 
+    /// <summary>
+    /// 清除全部基线：用于「词典内容变了」的场景——旧基线是按旧词典判定出来的，
+    /// 词典更新后必须让所有模组重新入队评估一次，否则新增的词条永远等不到触发时机。
+    /// 配合自动重覆盖：入队后由 <c>HasRecoverableText</c> 判定，有可恢复项才写回，无则仅同步基线。
+    /// </summary>
+    public void ClearBaselines() => _baseline.Clear();
+
     /// <summary> 取出至多 <paramref name="max"/> 个变化模组（主线程消费，每帧限量避免卡帧）。 </summary>
     public List<string> Drain(int max)
     {

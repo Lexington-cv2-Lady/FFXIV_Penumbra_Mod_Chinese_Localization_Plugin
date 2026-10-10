@@ -121,7 +121,23 @@ public sealed class HanhuaService
                 }
             }
 
-            if (groupNames.Count == 0 && optionNames.Count == 0 && optionDescs.Count == 0)
+            // FV4 多页面名（meta.json 顶层 PageNames，游戏内「页码」下拉显示的就是它）
+            var pageNames = new Dictionary<int, string>();
+            for (var pi = 0; pi < file.PageNames.Count; pi++)
+            {
+                var pn = file.PageNames[pi];
+                if (pn.Length == 0) continue;
+                var pKey = $"{file.FileName}||Page||{pn}";
+                var pZh = TranslateWithOverwrite(pn, pKey, file, modDirectory, pi, null,
+                    TextKind.Page, snapInfo, _dict, _snapshot);
+                if (pZh != pn && pZh.Length > 0)
+                {
+                    pageNames[pi] = pZh;
+                    totalChanged++;
+                }
+            }
+
+            if (groupNames.Count == 0 && optionNames.Count == 0 && optionDescs.Count == 0 && pageNames.Count == 0)
             {
                 // 按本文件判定（不能用跨文件累计的 totalChanged，否则后续空文件会被误报）
                 errors.Add(file.Groups.Count == 0
@@ -130,7 +146,7 @@ public sealed class HanhuaService
                 continue;
             }
 
-            if (_files.WriteTranslation(file.Path, file, groupNames, optionNames, optionDescs))
+            if (_files.WriteTranslation(file.Path, file, groupNames, optionNames, optionDescs, pageNames))
             {
                 totalFiles++;
             }
@@ -156,8 +172,8 @@ public sealed class HanhuaService
         return totalChanged;
     }
 
-    /// <summary> 文本种类（决定快照里取哪段英文原文）。 </summary>
-    private enum TextKind { Group, Option, Description }
+    /// <summary> 文本种类（决定快照里取哪段英文原文）。Page = FV4 多页面名（gIndex 复用为页索引）。 </summary>
+    private enum TextKind { Group, Option, Description, Page }
 
     /// <summary>
     /// 翻译单个条目（支持覆写）：
@@ -190,6 +206,8 @@ public sealed class HanhuaService
     private static string? FindEnglish(ModFileInfo? snapInfo, int gIndex, int? oIndex, TextKind kind)
     {
         if (snapInfo == null) return null;
+        if (kind == TextKind.Page)
+            return gIndex >= 0 && gIndex < snapInfo.PageNames.Count ? snapInfo.PageNames[gIndex] : null;
         var g = snapInfo.Groups.FirstOrDefault(x => x.Index == gIndex);
         if (g == null) return null;
         if (kind == TextKind.Group) return g.Name;
@@ -203,6 +221,7 @@ public sealed class HanhuaService
     {
         TextKind.Group => "Name",
         TextKind.Description => "Description",
+        TextKind.Page => "Page",
         _ => "Opt"
     };
 }

@@ -47,6 +47,7 @@ public class WikiExportWindow : Window, IDisposable
         var dictOk = !string.IsNullOrWhiteSpace(dictDir) && System.IO.Directory.Exists(dictDir);
 
         ImGui.TextWrapped("从灰机 wiki（cdn.huijiwiki.com/ff14）抓取 FFXIV 官方中/英名，写入 词典目录\\wiki_术语对照\\。");
+        Ui.Hint("请求已内置节流（约 0.7 秒/次）；若日志提示被 CDN 风控拦截，请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
         ImGui.Spacing();
         Ui.Hint($"词典目录：{dictDir}（{(dictOk ? "存在" : "不存在，请先在「目录和词典管理」里配置词典目录")}）");
         ImGui.Spacing();

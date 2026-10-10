@@ -239,6 +239,14 @@ public sealed class Plugin : IDalamudPlugin
     public void ReloadDictionary()
     {
         Dict.Load(Configuration.DictionaryPath);
+
+        // 词典变了：旧的签名基线是「按旧词典」判出来的，新增词条永远等不到文件被改写的那一刻。
+        // 故清空基线，让后台自动重覆盖把全部模组重新评估一次（有可恢复项才写回，写前自动备份）。
+        if (Configuration.AutoReHanhuaOnUpdate)
+        {
+            _sigTracker.ClearBaselines();
+            AppLog.Info("[更新重覆盖] 词典已重载，已清空签名基线，下一轮扫描将重新评估全部模组");
+        }
     }
 
     /// <summary>
@@ -417,6 +425,10 @@ public sealed class Plugin : IDalamudPlugin
                     if (ImportService.CanTranslate(Dict, fileName, "Description", o.Description)) return true;
                 }
             }
+
+            // FV4 多页面名（PageNames）：游戏内「页码」下拉显示的就是它，漏判会导致「只有页名是英文」时整模组被跳过
+            for (var pi = 0; pi < fi.PageNames.Count; pi++)
+                if (ImportService.CanTranslate(Dict, fileName, "Page", fi.PageNames[pi])) return true;
         }
         return false;
     }

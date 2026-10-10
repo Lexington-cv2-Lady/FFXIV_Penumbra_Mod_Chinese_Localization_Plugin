@@ -11,8 +11,11 @@ namespace FFXIVPenumbraHanhua.Services;
 /// 抽出 internal sealed 纯类型作测试 seam 的做法见 §B.39。
 /// </para>
 /// <para>
-/// 灰机 wiki 的 CDN 走 Cloudflare：本插件的 .NET SChannel TLS 指纹（JA3/JA4）被风控打分后，
-/// 返回的不是数据 JSON 而是挑战页 HTML；若不识别，会被当成"非 JSON 响应"误报，掩盖真正的拦截原因。
+/// 灰机 wiki 的 CDN 走 Cloudflare：触发风控后返回的不是数据 JSON 而是挑战页 HTML；若不识别，
+/// 会被当成"非 JSON 响应"误报，掩盖真正的拦截原因。
+/// 触发原因有两层（2026-10 实测）：① TLS 握手指纹（JA3/JA4），.NET 的 SChannel 指纹易被打分，故抓取优先用 curl；
+/// ② **速率/行为**——短时间内密集请求会把出口 IP 拉黑数十分钟到数小时，此时连 curl 与浏览器 UA 也不放行。
+/// 因此抓取侧另配节流/退避/全局中止（见 <see cref="WikiExportService"/>），本类型只负责"识别"。
 /// </para>
 /// </summary>
 internal sealed class CloudflareChallengeDetector

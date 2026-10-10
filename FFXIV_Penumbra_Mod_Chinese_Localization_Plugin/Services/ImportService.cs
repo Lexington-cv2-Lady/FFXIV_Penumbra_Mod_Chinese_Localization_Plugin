@@ -126,7 +126,31 @@ public sealed class ImportService
                     }
                 }
 
-                if (groupNames.Count == 0 && optionNames.Count == 0 && optionDescs.Count == 0)
+                // FV4 多页面名（meta.json 顶层 PageNames，游戏内「页码」下拉显示的就是它）
+                var pageNames = new Dictionary<int, string>();
+                for (var pi = 0; pi < fileInfo.PageNames.Count; pi++)
+                {
+                    var pn = fileInfo.PageNames[pi];
+                    if (pn.Length == 0) continue;
+                    anyContent = true;
+                    if (!IsDone(dict, fileName, "Page", pn)) allDone = false;
+                    var pName = ApplyLookup(dict, fileName, "Page", pn);
+                    if (pName != null) pageNames[pi] = pName;
+
+                    // 覆写旧译法：已中文页名按英文快照重查词典
+                    if (overwrite && snapInfo != null && dict.ContainsChinese(pn))
+                    {
+                        var enP = pi < snapInfo.PageNames.Count ? snapInfo.PageNames[pi] : null;
+                        if (!string.IsNullOrWhiteSpace(enP) && !dict.ContainsChinese(enP))
+                        {
+                            var tP = Translator.Translate(enP, $"{fileName}||Page||{enP}", dict);
+                            if (!string.IsNullOrWhiteSpace(tP) && tP != pn)
+                                pageNames[pi] = tP;
+                        }
+                    }
+                }
+
+                if (groupNames.Count == 0 && optionNames.Count == 0 && optionDescs.Count == 0 && pageNames.Count == 0)
                     continue;
 
                 // 整个模组打 zip 备份一次（同一模组多文件只备一次）
@@ -153,9 +177,9 @@ public sealed class ImportService
                     _log.Warn($"[导入] {mod.Directory}/{fileInfo.FileName}：英文快照保存失败（覆写功能可能受影响）：{ex.Message}");
                 }
 
-                if (_files.WriteTranslation(fileInfo.Path, fileInfo, groupNames, optionNames, optionDescs))
+                if (_files.WriteTranslation(fileInfo.Path, fileInfo, groupNames, optionNames, optionDescs, pageNames))
                 {
-                    totalWritten += groupNames.Count + optionNames.Count + optionDescs.Count;
+                    totalWritten += groupNames.Count + optionNames.Count + optionDescs.Count + pageNames.Count;
                     wroteAny = true;
                 }
                 else
@@ -203,7 +227,10 @@ public sealed class ImportService
         if (dict.IsBlacklisted(english)) return true;
         if (!HasAsciiLetter(english)) return true;
         var zh = dict.LookupMod($"{fileName}||{field}||{english}") ?? dict.LookupTerm(english);
-        return !string.IsNullOrWhiteSpace(zh);
+        if (!string.IsNullOrWhiteSpace(zh)) return true;
+        // 与 CanTranslate 保持一致：整串未命中但分块翻译能翻出来的条目，也算「有得处理」，
+        // 否则会出现「实际写回了却判定未完成」的不一致（导致「已翻译」标记迟迟不建）。
+        return SplitTranslate(dict, fileName, field, english) == null;
     }
 
     private static bool HasAsciiLetter(string s)
@@ -233,7 +260,23 @@ public sealed class ImportService
 
         var zh = dict.LookupMod($"{fileName}||{field}||{english}");
         if (zh == null) zh = dict.LookupTerm(english);
-        return !string.IsNullOrWhiteSpace(zh) && zh != english;
+        if (!string.IsNullOrWhiteSpace(zh) && zh != english) return true;
+
+        // 整串未命中时再问一次分块翻译（Translator）：否则 "WAR Animation"、"WHM/BLM" 这类
+        // 「词典里只存了单词、没存整串」的复合文本永远不会被翻译写入与自动重覆盖认领（2026-10-10 整改）。
+        return SplitTranslate(dict, fileName, field, english) != null;
+    }
+
+    /// <summary>
+    /// 整串查表未命中时的分块翻译兜底（走 <see cref="Translator"/>，与「词典翻译写入」同一管线）。
+    /// 返回 null = 翻不出与原文不同的结果（调用方据此跳过，不写回）。
+    /// </summary>
+    private static string? SplitTranslate(DictionaryService dict, string fileName, string field, string english)
+    {
+        if (!HasAsciiLetter(english)) return null; // 纯数字/符号无需翻译
+        var t = Translator.Translate(english, $"{fileName}||{field}||{english}", dict);
+        if (string.IsNullOrWhiteSpace(t) || t == english) return null;
+        return t;
     }
 
     /// <summary> 查词典译文：原文为空 / 已含中文（不重复覆盖）/ 黑名单 -> 不写回。mods 层精确键优先，再 terms 层。 </summary>
@@ -247,6 +290,9 @@ public sealed class ImportService
 
         var zh = dict.LookupMod($"{fileName}||{field}||{english}");
         if (zh == null) zh = dict.LookupTerm(english);
-        return zh == english ? null : zh;
+        if (!string.IsNullOrWhiteSpace(zh) && zh != english) return zh;
+
+        // 整串查表未命中 -> 分块翻译兜底（与「词典翻译写入」同一管线，覆盖 "WAR Animation" 等复合文本）
+        return SplitTranslate(dict, fileName, field, english);
     }
 }

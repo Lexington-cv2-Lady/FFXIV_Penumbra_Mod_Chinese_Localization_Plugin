@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -42,6 +43,30 @@ public sealed class WikiExportService
     /// <summary> 抓取用 UA（curl 与 HttpClient 共用）。 </summary>
     private const string UserAgentValue = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua";
 
+    /// <summary> 相邻请求最小间隔（毫秒）。灰机 wiki 走 Cloudflare，密集请求会被拉黑 IP，故主动放慢。 </summary>
+    private const int RequestIntervalMs = 700;
+
+    /// <summary> 单次请求的网络失败重试次数（不含首次）；命中 Cloudflare 挑战页不重试。 </summary>
+    private const int MaxRetries = 2;
+
+    /// <summary> 续抓进度文件名（写在 词典目录\wiki_术语对照\ 下）。 </summary>
+    private const string ProgressFileName = "_抓取进度.json";
+
+    /// <summary> 续抓进度有效期（小时）：超时则丢弃、改从头抓取，避免长期跳过断点之前的页面。 </summary>
+    private const int ProgressValidHours = 12;
+
+    /// <summary> 首次失败退避（毫秒）。 </summary>
+    private const int RetryDelayFirstMs = 10_000;
+
+    /// <summary> 后续失败退避（毫秒）。 </summary>
+    private const int RetryDelayNextMs = 30_000;
+
+    /// <summary> 节流状态锁。 </summary>
+    private readonly object _gate = new();
+
+    /// <summary> 下次允许发起请求的时间（UTC）。 </summary>
+    private DateTime _nextRequestAt;
+
     public string LastResult { get; private set; } = "";
 
     public WikiExportService(AppLog log)
@@ -53,15 +78,59 @@ public sealed class WikiExportService
     }
 
     /// <summary>
-    /// 取数据页正文。灰机 wiki 的 CDN 是 Cloudflare，按 TLS 握手指纹（JA3/JA4）给请求打分：
-    /// .NET 的 SChannel 指纹会被风控挑战拦成 403 挑战页（curl/浏览器指纹则放行）。
-    /// 故优先调用系统自带 curl.exe 取数，被拦/不可用时退回 HttpClient 兜底。
+    /// 取数据页正文（含节流与退避）。
+    /// 灰机 wiki 的 CDN 是 Cloudflare。早期它主要按 TLS 握手指纹（JA3/JA4）打分，.NET 的 SChannel 指纹会被拦，
+    /// 故仍优先用系统自带 curl.exe（指纹更接近浏览器）。
+    /// 但 2026-10 实测：**风控已升级到「速率/行为」维度**——短时间内密集请求会把出口 IP 拉黑（curl 指纹同样不放行），
+    /// 且冷却长达数十分钟到数小时。因此本方法统一做两件事：
+    /// ① 请求节流：相邻请求之间至少间隔 <see cref="RequestIntervalMs"/> 毫秒；
+    /// ② 失败退避：网络失败按 10s/30s 退避重试，重试耗尽才放弃。
+    /// 命中 Cloudflare 挑战页时**不重试**（反复试只会延长封禁），交由调用方全局中止。
     /// </summary>
-    private async Task<string?> FetchAsync(string url, CancellationToken ct)
+    /// <returns>(正文, 是否被风控拦截)。被拦时正文为 null 且第二项为 true。</returns>
+    private async Task<(string? Body, bool Blocked)> FetchAsync(string url, CancellationToken ct)
     {
-        var viaCurl = await TryCurlAsync(url, ct).ConfigureAwait(false);
-        if (viaCurl != null)
-            return viaCurl;
+        for (var attempt = 0; ; attempt++)
+        {
+            if (ct.IsCancellationRequested) return (null, false);
+            if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false);
+
+            var body = await TryCurlAsync(url, ct).ConfigureAwait(false)
+                       ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
+
+            if (body != null)
+            {
+                // 拿到内容但是 Cloudflare 挑战页：确认被风控，立刻上报，不再重试
+                if (CloudflareChallengeDetector.IsChallenge(body))
+                    return (null, true);
+                return (body, false);
+            }
+
+            if (ct.IsCancellationRequested) return (null, false);
+            if (attempt >= MaxRetries) return (null, false);
+            if (!await DelayAsync(attempt == 0 ? RetryDelayFirstMs : RetryDelayNextMs, ct).ConfigureAwait(false))
+                return (null, false);
+        }
+    }
+
+    /// <summary> 可取消等待；被取消返回 false（不抛异常，交由调用方按 ct 判定）。 </summary>
+    private static async Task<bool> DelayAsync(int ms, CancellationToken ct)
+    {
+        if (ms <= 0) return true;
+        try
+        {
+            await Task.Delay(ms, ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary> HttpClient 兜底取数（curl 缺失/失败时）。 </summary>
+    private async Task<string?> TryHttpAsync(string url, CancellationToken ct)
+    {
         try
         {
             return await _http.GetStringAsync(url, ct).ConfigureAwait(false);
@@ -71,6 +140,22 @@ public sealed class WikiExportService
             return null;
         }
     }
+
+    /// <summary> 请求节流：保证相邻请求间隔不小于 <see cref="RequestIntervalMs"/>；被取消返回 false。 </summary>
+    private async Task<bool> ThrottleAsync(CancellationToken ct)
+    {
+        var wait = 0;
+        lock (_gate)
+        {
+            wait = NextDelayMs(_nextRequestAt, DateTime.UtcNow);
+            _nextRequestAt = DateTime.UtcNow.AddMilliseconds(wait + RequestIntervalMs);
+        }
+        return wait <= 0 || await DelayAsync(wait, ct).ConfigureAwait(false);
+    }
+
+    /// <summary> 距离下次可请求还需等待的毫秒数（纯函数，便于单测）。 </summary>
+    internal static int NextDelayMs(DateTime nextAllowedAt, DateTime now)
+        => nextAllowedAt > now ? (int)Math.Ceiling((nextAllowedAt - now).TotalMilliseconds) : 0;
 
     /// <summary> 用系统自带 curl.exe 抓取（返回正文；curl 缺失/失败返回 null）。 </summary>
     private static async Task<string?> TryCurlAsync(string url, CancellationToken ct)
@@ -138,7 +223,10 @@ public sealed class WikiExportService
 
     /// <summary>
     /// 执行提取。perCat=true 按勾选分类各写一个 json；false 合并写入 汇总.json。
-    /// log 用于逐条日志回传；ct 可取消（已抓取部分仍保存）。返回新增术语条数。
+    /// log 用于逐条日志回传；ct 可取消（已抓取部分仍保存）。
+    /// 请求带节流（<see cref="RequestIntervalMs"/>）与失败退避；命中 Cloudflare 挑战页立即全局中止（-3），
+    /// 并保留续抓进度（<see cref="ProgressValidHours"/> 小时内下次运行从断点续抓）。
+    /// 返回：新增术语条数；-1=参数/异常，-2=已取消，-3=被风控拦截中止。
     /// </summary>
     public async Task<int> ExportAsync(IReadOnlyList<string> prefixes, bool perCat, string dictionaryDir,
         Action<string>? log = null, CancellationToken ct = default)
@@ -154,6 +242,12 @@ public sealed class WikiExportService
         Directory.CreateDirectory(catDir);
         var blacklist = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         blacklist.UnionWith(TextListFile.Load(Path.Combine(catDir, "wiki_术语对照_黑名单.json")));
+
+        // 续抓进度：上次被风控拦截/取消而中断时保留的断点（有效期见 ProgressValidHours）。
+        // 目的：续跑只补抓未抓过的页，而不是从头重打几百个请求再次触发 IP 冷却。
+        var progress = LoadProgress(catDir);
+        if (progress.Count > 0)
+            log?.Invoke($"[提示] 检测到上次未完成的抓取进度，将从断点继续（{ProgressValidHours} 小时内有效）");
 
         var rejected = 0;   // 黑名单拒绝
         var noise = 0;      // 噪音词拒绝
@@ -172,7 +266,8 @@ public sealed class WikiExportService
             catResults[t] = new JsonObject();
         }
 
-        var cancelled = false; // 取消时跳出抓取循环，已抓取部分仍在下方写回保存
+        var cancelled = false;     // 取消时跳出抓取循环，已抓取部分仍在下方写回保存
+        var blockedGlobal = false; // 命中 Cloudflare 风控时全局中止，已抓取部分同样写回保存
 
         try
         {
@@ -186,6 +281,12 @@ public sealed class WikiExportService
                           Uri.EscapeDataString(prefix);
                 var gapCont = "";
                 var rvCont = "";
+                if (progress.TryGetValue(type, out var savedCont))
+                {
+                    gapCont = savedCont.Gap;
+                    rvCont = savedCont.Rv;
+                    log?.Invoke($"[提示] {disp} 从上次断点继续（gapcontinue={gapCont}）");
+                }
                 var done = false;
                 var catPages = 0;
                 var catLogged = 0; // 已记录进度时的页数（按累计值每 100 页记一次，与单次响应批量大小无关）
@@ -202,13 +303,13 @@ public sealed class WikiExportService
                     if (gapCont.Length > 0) url += "&gapcontinue=" + Uri.EscapeDataString(gapCont);
                     if (rvCont.Length > 0) url += "&rvcontinue=" + Uri.EscapeDataString(rvCont);
 
-                    string? resp;
-                    if (ct.IsCancellationRequested)
+                    var (resp, blocked) = await FetchAsync(url, ct).ConfigureAwait(false);
+                    if (blocked)
                     {
-                        cancelled = true;
+                        // 命中 Cloudflare 挑战页：立即全局中止，后续分类不再尝试（继续打只会延长 IP 冷却）
+                        blockedGlobal = true;
                         break;
                     }
-                    resp = await FetchAsync(url, ct).ConfigureAwait(false);
                     if (resp == null)
                     {
                         if (ct.IsCancellationRequested)
@@ -217,11 +318,6 @@ public sealed class WikiExportService
                             break;
                         }
                         log?.Invoke($"[错误] 获取数据页失败（{disp}）：网络请求失败（curl 与内置 HttpClient 均未取到数据）");
-                        break;
-                    }
-                    if (CloudflareChallengeDetector.IsChallenge(resp))
-                    {
-                        log?.Invoke($"[错误] {disp} 被 CDN 风控拦截（Cloudflare 验证页，非数据）；请稍后或切换网络/代理后重试");
                         break;
                     }
 
@@ -292,13 +388,29 @@ public sealed class WikiExportService
                         done = true;
                     }
 
+                    // 续抓点：本批已解析完毕才落盘；抓完的分类移除断点（下次从头抓，可拾取新增页）
+                    if (done) progress.Remove(type);
+                    else progress[type] = (gapCont, rvCont);
+                    SaveProgress(catDir, progress);
+
                     if (catPages - catLogged >= 100)
                     {
                         catLogged = catPages;
                         log?.Invoke($"[进度] {disp} 已处理 {catPages} 页，新增 {added} 条（命中已有 {hitExisting}，跳过）");
                     }
                 }
+
+                if (blockedGlobal)
+                {
+                    log?.Invoke($"[错误] {disp} 被 CDN 风控拦截（Cloudflare 验证页，非数据），已中止全部分类抓取。" +
+                                "已抓取部分仍会保存；请间隔数十分钟或切换网络/代理后重试，切勿连续重试。");
+                    break;
+                }
             }
+
+            // 未被取消、未被拦截：全部分类均已抓完，清掉续抓进度（下次为完整抓取，可拾取新增页）
+            if (!cancelled && !blockedGlobal)
+                SaveProgress(catDir, progress);
 
             // 汇总模式：合并全部分类
             if (!perCat)
@@ -383,6 +495,12 @@ public sealed class WikiExportService
                 _log.Info(LastResult);
                 return -2;
             }
+            if (blockedGlobal)
+            {
+                LastResult = "Wiki 提取被 CDN 风控拦截已中止（已抓取部分已保存；请间隔数十分钟或换网络后重试）";
+                _log.Info(LastResult);
+                return -3;
+            }
 
             LastResult = $"Wiki 提取完成：新增 {added} 条，命中已有 {hitExisting} 条，用时 {DateTime.Now:HH:mm:ss}";
             _log.Info(LastResult);
@@ -393,6 +511,73 @@ public sealed class WikiExportService
             LastResult = "[错误] Wiki 提取异常：" + ex.Message;
             _log.Info(LastResult);
             return -1;
+        }
+    }
+
+    /// <summary>
+    /// 读取续抓进度：上次中断时保存的各分类分页断点（gapcontinue/rvcontinue）。
+    /// 不存在、解析失败、超过 <see cref="ProgressValidHours"/> 小时均返回空字典（改从头抓取）。
+    /// </summary>
+    internal static Dictionary<string, (string Gap, string Rv)> LoadProgress(string catDir)
+    {
+        var res = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+        var path = Path.Combine(catDir, ProgressFileName);
+        if (!File.Exists(path)) return res;
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root) return res;
+            var savedAt = root["savedAt"]?.ToString();
+            if (!string.IsNullOrEmpty(savedAt) &&
+                DateTime.TryParse(savedAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var saved) &&
+                (DateTime.UtcNow - saved).TotalHours > ProgressValidHours)
+                return res; // 过期：丢弃，避免长期跳过断点之前的页面
+            if (root["items"] is JsonObject items)
+            {
+                foreach (var kv in items)
+                {
+                    if (kv.Value is not JsonObject o) continue;
+                    res[kv.Key] = (o["gapcontinue"]?.ToString() ?? "", o["rvcontinue"]?.ToString() ?? "");
+                }
+            }
+        }
+        catch
+        {
+            res.Clear();
+        }
+        return res;
+    }
+
+    /// <summary> 写入续抓进度；map 为空则删除进度文件。失败不影响主流程（仅失去续跑能力）。 </summary>
+    internal static void SaveProgress(string catDir, Dictionary<string, (string Gap, string Rv)> map)
+    {
+        var path = Path.Combine(catDir, ProgressFileName);
+        try
+        {
+            if (map.Count == 0)
+            {
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            var items = new JsonObject();
+            foreach (var kv in map)
+                items[kv.Key] = new JsonObject
+                {
+                    ["gapcontinue"] = kv.Value.Gap,
+                    ["rvcontinue"] = kv.Value.Rv
+                };
+            var root = new JsonObject
+            {
+                ["savedAt"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                ["items"] = items
+            };
+            // 原子写（.tmp → File.Move）：续抓进度虽属派生状态，但直写被中断会留半截 JSON，
+            // 复用 JsonFile.WriteAtomic 与项目内其它词典/快照写入口径一致（审查方 2026-10-10 观察项）。
+            JsonFile.WriteAtomic(path, root.ToJsonString(JsonFile.Indented));
+        }
+        catch
+        {
+            /* 进度保存失败可忽略 */
         }
     }
 
@@ -507,6 +692,7 @@ public sealed class WikiExportService
         {
             if (Path.GetFileName(f) == "wiki_术语对照_黑名单.json") continue;
             if (Path.GetFileName(f) == "wiki汇总.json") continue;
+            if (Path.GetFileName(f) == ProgressFileName) continue; // 续抓进度不是术语文件，不参与空文件清理
             try
             {
                 var root = JsonNode.Parse(File.ReadAllText(f)) as JsonObject;
