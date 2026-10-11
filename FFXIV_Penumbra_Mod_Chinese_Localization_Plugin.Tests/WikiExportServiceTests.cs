@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -118,5 +119,46 @@ public class WikiExportServiceTests
         {
             try { Directory.Delete(Path, true); } catch { /* 清理失败不影响用例 */ }
         }
+    }
+}
+
+// ============ C. 种族固定词表的官方译名防回归 ============
+
+/// <summary>
+/// 2026-10-11 司令官截图指出：「森岭之民」是错字，官方为「森林之民」。
+/// 根因不在 wiki，而在 <see cref="WikiExportService.RaceTerms"/> 的**硬编码**——
+/// 本表不走网络（不受 CDN 风控影响），却会被提取时写入 种族.json，把错字一并落库。
+/// 用例直接锁住词表内容，防止此后再次被旧文本覆盖。
+/// </summary>
+public class RaceTermsTests
+{
+    [Fact]
+    public void Wildwood_官方译名是森林之民_不是森岭之民()
+    {
+        var wildwood = WikiExportService.RaceTerms.Where(r => r.En == "Wildwood").ToList();
+        Assert.Single(wildwood);
+        Assert.Equal("森林之民", wildwood[0].Zh);
+        Assert.DoesNotContain("森岭之民", WikiExportService.RaceTerms.Select(r => r.Zh));
+    }
+
+    [Fact]
+    public void 种族词表_英文名不重复_且中文名均非空()
+    {
+        var terms = WikiExportService.RaceTerms;
+        Assert.NotEmpty(terms);
+        // Au Ra / AuRa 是官方两种写法，允许重复英文，故只断言「无空中文」与「无完全重复的行」
+        Assert.All(terms, r =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(r.En));
+            Assert.False(string.IsNullOrWhiteSpace(r.Zh));
+        });
+        Assert.Equal(terms.Length, terms.Select(r => (r.En, r.Zh)).Distinct().Count());
+    }
+
+    [Fact]
+    public void Duskwight_官方译名是黑影之民()
+    {
+        var d = WikiExportService.RaceTerms.FirstOrDefault(r => r.En == "Duskwight");
+        Assert.Equal("黑影之民", d.Zh);
     }
 }

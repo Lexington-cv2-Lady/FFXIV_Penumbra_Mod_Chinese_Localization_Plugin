@@ -209,11 +209,15 @@ public sealed class WikiExportService
     };
 
     /// <summary> 固定词表：玩家种族（含子种族）官方中文名/英文名。 </summary>
-    private static readonly (string En, string Zh)[] RaceTerms =
+    // ⚠ 本表是硬编码的官方译名，**不来自 wiki 抓取**（故不受 CDN 风控影响）。
+    //    Wildwood 官方译名为「森林之民」（2026-09-23 经灰机种族页与国服更新笔记核实，
+    //    并同日更正过词典三处）；早前此处误写「森岭之民」，wiki 抓取时会把错字一并写入
+    //    种族.json（2026-10-11 司令官截图指出）。改本表务必同步核对词典与 wiki 侧。
+    internal static readonly (string En, string Zh)[] RaceTerms =
     {
         ("Hyur", "人族"), ("Elezen", "精灵族"), ("Lalafell", "拉拉菲尔族"), ("Miqo'te", "猫魅族"),
         ("Roegadyn", "鲁加族"), ("Au Ra", "敖龙族"), ("AuRa", "敖龙族"), ("Hrothgar", "硌狮族"), ("Viera", "维埃拉族"),
-        ("Midlander", "中原之民"), ("Highlander", "高地之民"), ("Wildwood", "森岭之民"), ("Duskwight", "黑影之民"),
+        ("Midlander", "中原之民"), ("Highlander", "高地之民"), ("Wildwood", "森林之民"), ("Duskwight", "黑影之民"),
         ("Plainsfolk", "平原之民"), ("Dunesfolk", "沙漠之民"), ("Sunseeker", "逐日之民"), ("Moonkeeper", "护月之民"),
         ("Sea Wolf", "北洋之民"), ("Hellsguard", "红焰之民"), ("Raen", "晨曦之民"), ("Xaela", "暮晖之民"),
         ("Helions", "掠日之民"), ("Lost", "迷失之民"), ("Veena", "密林之民"), ("Rava", "山林之民"),
