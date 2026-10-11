@@ -230,8 +230,16 @@ internal sealed class WebView2WikiFetcher : IDisposable
         {
             var dataFolder = Path.Combine(Path.GetTempPath(), "pmh_wiki_webview");
             Directory.CreateDirectory(dataFolder);
-            _log.Info("[wv2] 正在创建 WebView2 环境…");
-            var env = await CoreWebView2Environment.CreateAsync(dataFolder);
+            // 显式指定 runtime 可执行目录：游戏进程里会命中系统旧版 native loader（1.0.864.35）的自动探测逻辑，
+            // 误判「找不到 runtime」；显式给目录可绕过该探测（本机控制台测试同一 SDK 自动探测是成功的）。
+            var exeFolder = WebView2RuntimeProbe.TryGetRuntimeExecutableFolder();
+            _log.Info("[wv2] 正在创建 WebView2 环境…"
+                      + (exeFolder != null ? "（显式指定 runtime 目录：" + exeFolder + "）" : "（自动探测 runtime）"));
+            CoreWebView2Environment env;
+            if (exeFolder != null)
+                env = await CoreWebView2Environment.CreateAsync(exeFolder, dataFolder);
+            else
+                env = await CoreWebView2Environment.CreateAsync(dataFolder);
             _ctl = await env.CreateCoreWebView2ControllerAsync(_hwnd);
             _log.Info("[wv2] 控制器已绑定，导航同源页…");
             var nav = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

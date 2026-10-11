@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using Microsoft.Win32;
 
 namespace FFXIVPenumbraHanhua.Services;
@@ -62,6 +64,40 @@ public static class WebView2RuntimeProbe
             if (!(char.IsAsciiDigit(s[i]) || s[i] == '.')) { end = i; break; }
         var head = s[..end].TrimEnd('.');
         return Version.TryParse(head, out var v2) ? v2 : null;
+    }
+
+    /// <summary>
+    /// 探测 WebView2 Runtime 的**可执行文件目录**（含 msedgewebview2.exe 的版本目录，取最新）。
+    /// 供 WebView2 创建环境时**显式指定**，绕过 loader 的自动探测——本机实测：
+    /// 同一 SDK 在控制台能自动探测成功，但在游戏进程里报「找不到 runtime」，
+    /// 原因是游戏进程命中了系统里旧版 native loader（1.0.864.35）的探测逻辑。
+    /// 显式指定目录可跳过该探测。找不到返回 null（退回自动探测）。
+    /// </summary>
+    public static string? TryGetRuntimeExecutableFolder()
+    {
+        var roots = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "EdgeWebView", "Application"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "EdgeWebView", "Application"),
+        };
+        foreach (var root in roots)
+        {
+            try
+            {
+                if (!Directory.Exists(root)) continue;
+                // 版本目录按名（版本号）降序，取第一个含 msedgewebview2.exe 的
+                var best = Directory.EnumerateDirectories(root)
+                    .Where(d => File.Exists(Path.Combine(d, "msedgewebview2.exe")))
+                    .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                if (best != null) return best;
+            }
+            catch
+            {
+                /* 忽略，继续下一个候选根目录 */
+            }
+        }
+        return null;
     }
 
     /// <summary>
