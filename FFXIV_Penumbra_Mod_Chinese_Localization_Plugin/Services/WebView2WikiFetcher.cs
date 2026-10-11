@@ -81,7 +81,6 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private static WndProcDelegate? _wndProcKeep;
 
     // ---- WebView2 状态（仅在本类 STA 线程访问，跨线程经由 FetchAsync 的调度）----
-    private readonly ConcurrentQueue<Action> _initQueue = new();
     private CoreWebView2Controller? _ctl;
     private TaskCompletionSource<bool>? _readyTcs;
     private volatile bool _available;
@@ -134,9 +133,10 @@ internal sealed class WebView2WikiFetcher : IDisposable
             return null;
         }
 
-        // 把 fetch 调度到 WebView2 线程（必须在该线程访问 Controller）
+        // 把 fetch 调度到 WebView2 线程（必须在该线程访问 Controller）。
+        // 投递到 PumpQueue（消息泵真正排空的队列）并唤醒，否则永不被执行。
         var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _initQueue.Enqueue(async () =>
+        PumpQueue.Enqueue(async () =>
         {
             try
             {
@@ -162,6 +162,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 tcs.TrySetResult(null);
             }
         });
+        WakePump(); // 必须唤醒：消息泵正阻塞在 GetMessage，否则上方的 fetch 永不被执行
         try
         {
             return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
@@ -306,8 +307,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
         public override void Post(SendOrPostCallback d, object? state)
         {
-            // async 延续
-            _owner._initQueue.Enqueue(() => d(state));
+            // async 续体必须投到「消息泵真正会排空的那个队列」（PumpQueue），
+            // 否则续体无人消费 → await 永久卡死（2026-10-11 实测踩过）。
+            PumpQueue.Enqueue(() => d(state));
             _owner.WakePump();
         }
 
