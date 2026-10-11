@@ -13,6 +13,9 @@ namespace FFXIVPenumbraHanhua.Windows;
 /// <summary> Wiki 提取窗口：从灰机 wiki 抓取官方中/英名，写入 词典目录\wiki_术语对照\。 </summary>
 public class WikiExportWindow : Window, IDisposable
 {
+    /// <summary> 验证 cookie 保守有效期（分钟）。cf_clearance 实际可存更久，过期后再过点即可。 </summary>
+    private const int CaptchaTtlMinutes = 60;
+
     private readonly Plugin _plugin;
     private readonly WikiExportService _wiki;
 
@@ -21,6 +24,7 @@ public class WikiExportWindow : Window, IDisposable
     private string _result = "";
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
+    private WikiCaptchaWindow? _captcha;  // Cloudflare 验证窗口（实验功能；主线程轮询）
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -38,7 +42,12 @@ public class WikiExportWindow : Window, IDisposable
         for (var i = 0; i < _catChecked.Length; i++) _catChecked[i] = true;
     }
 
-    public void Dispose() => _cts?.Cancel();
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _captcha?.Dispose();
+        _captcha = null;
+    }
 
     public override void Draw()
     {
@@ -49,6 +58,14 @@ public class WikiExportWindow : Window, IDisposable
         ImGui.TextWrapped("从灰机 wiki（cdn.huijiwiki.com/ff14）抓取 FFXIV 官方中/英名，写入 词典目录\\wiki_术语对照\\。");
         Ui.Hint("注意：该功能可能因灰机 wiki 的风控而暂时失效。");
         Ui.Hint("请求已内置节流（约 0.7 秒/次）；若日志提示被 CDN 风控拦截，请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
+        ImGui.Spacing();
+        // 实验开关：默认关。开启后遇 Cloudflare 验证会弹独立 WebView2 窗口让用户过点，插件自动接管 cookie 续跑。
+        var captchaOn = cfg.WikiCaptchaVerify;
+        if (ImGui.Checkbox("启用 wiki 验证接管（遇 Cloudflare 验证弹独立窗口；实验功能，需游戏内实测）##WikiCaptcha", ref captchaOn))
+        {
+            cfg.WikiCaptchaVerify = captchaOn;
+            cfg.Save();
+        }
         ImGui.Spacing();
         Ui.Hint($"词典目录：{dictDir}（{(dictOk ? "存在" : "不存在，请先在「目录和词典管理」里配置词典目录")}）");
         ImGui.Spacing();
@@ -98,34 +115,8 @@ public class WikiExportWindow : Window, IDisposable
                 }
                 else
                 {
-                    var prefixes = new List<string>();
-                    if (_perCat)
-                    {
-                        for (var i = 0; i < _catChecked.Length; i++)
-                            if (_catChecked[i]) prefixes.Add(WikiExportService.Categories[i].Prefix);
-                        if (prefixes.Count == 0)
-                        {
-                            _result = "请至少勾选一个分类";
-                            goto skipStart;
-                        }
-                    }
-                    else
-                    {
-                        // 汇总提取：固定抓取有数据的分类（Race 为固定词表，提取时自动并入）
-                        prefixes.AddRange(new[] { "Item/", "Action/", "Quest/", "Achievement/", "Emote/" });
-                    }
-
-                    _result = "";
-                    _cts = new CancellationTokenSource();
-                    _task = Task.Run(async () =>
-                    {
-                        var n = await _wiki.ExportAsync(prefixes, _perCat, dictDir,
-                            msg => _result = _result.Length > 0 ? _result + "\n" + msg : msg,
-                            _cts.Token);
-                        return n;
-                    });
+                    StartExtract(dictDir);
                 }
-            skipStart:;
             }
         }
         if (ImGui.IsItemHovered())
@@ -148,6 +139,13 @@ public class WikiExportWindow : Window, IDisposable
                 var n = _task.Result;
                 if (n != 0) _plugin.ReloadDictionary(); // 取消(-2)时也可能已写入部分词条，需重载
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
+                // -4 = 遇到 Cloudflare 验证且开启接管 → 弹独立 WebView2 窗口让用户过点
+                if (n == -4 && cfg.WikiCaptchaVerify && _wiki.PendingCaptchaUrl != null && _captcha == null)
+                {
+                    _captcha = new WikiCaptchaWindow();
+                    _captcha.Start(_wiki.PendingCaptchaUrl!);
+                    _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已弹出 wiki 验证窗口：请在窗口内完成 Cloudflare 验证，插件将自动接管 cookie 并继续提取。";
+                }
             }
             finally
             {
@@ -156,5 +154,72 @@ public class WikiExportWindow : Window, IDisposable
                 _cts = null;
             }
         }
+
+        PollCaptcha(dictOk ? dictDir : null);
+    }
+
+    /// <summary>
+    /// 主线程轮询 Cloudflare 验证窗口：拿到 cookie 则注入并自动从断点续跑；
+    /// 失败/用户取消则关闭并回退（不阻断其它功能）。
+    /// </summary>
+    private void PollCaptcha(string? dictDir)
+    {
+        if (_captcha == null) return;
+
+        if (_captcha.HasCookie)
+        {
+            var ck = _captcha.TakeCookie();
+            _captcha.Dispose();
+            _captcha = null;
+            if (!string.IsNullOrEmpty(ck) && dictDir != null)
+            {
+                _wiki.SetCaptchaCookie(ck!, CaptchaTtlMinutes);
+                _result += (_result.Length > 0 ? "\n" : "") + "[完成] 已获取 Cloudflare 验证 cookie，自动继续提取…";
+                StartExtract(dictDir); // 从已保存的断点续跑
+            }
+            return;
+        }
+
+        if (_captcha.Failed || _captcha.ClosedByUser || !_captcha.IsActive)
+        {
+            var failed = _captcha.Failed;
+            _captcha.Dispose();
+            _captcha = null;
+            _result += (_result.Length > 0 ? "\n" : "")
+                       + (failed
+                           ? "[提示] 验证窗口不可用（WebView2 初始化失败），已回退。可关闭「wiki 验证接管」或稍后重试。"
+                           : "[提示] 已取消 Cloudflare 验证。");
+        }
+    }
+
+    /// <summary> 按当前勾选启动提取（供「开始提取」与验证后续跑复用）。 </summary>
+    private void StartExtract(string dictDir)
+    {
+        var prefixes = new List<string>();
+        if (_perCat)
+        {
+            for (var i = 0; i < _catChecked.Length; i++)
+                if (_catChecked[i]) prefixes.Add(WikiExportService.Categories[i].Prefix);
+            if (prefixes.Count == 0)
+            {
+                _result = "请至少勾选一个分类";
+                return;
+            }
+        }
+        else
+        {
+            // 汇总提取：固定抓取有数据的分类（Race 为固定词表，提取时自动并入）
+            prefixes.AddRange(new[] { "Item/", "Action/", "Quest/", "Achievement/", "Emote/" });
+        }
+
+        _result = "";
+        _cts = new CancellationTokenSource();
+        _task = Task.Run(async () =>
+        {
+            var n = await _wiki.ExportAsync(prefixes, _perCat, dictDir,
+                msg => _result = _result.Length > 0 ? _result + "\n" + msg : msg,
+                _cts.Token);
+            return n;
+        });
     }
 }

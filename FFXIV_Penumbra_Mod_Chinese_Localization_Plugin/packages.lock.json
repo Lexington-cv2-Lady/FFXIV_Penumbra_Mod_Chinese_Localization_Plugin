@@ -14,6 +14,12 @@
         "resolved": "1.2.39",
         "contentHash": "fcFN01tDTIQqDuTwr1jUQK/geofiwjG5DycJQOnC72i1SsLAk1ELe+apBOuZ11UMQG8YKFZG1FgvjZPbqHyatg=="
       },
+      "Microsoft.Web.WebView2": {
+        "type": "Direct",
+        "requested": "[1.0.4258.31, )",
+        "resolved": "1.0.4258.31",
+        "contentHash": "sHVZ2MQrHT1J3q5/6csn0fIP27rzpTO/RRC+wPQDrZheB7T4t2n+vVbY6SdCKr4WRV9s/gmBM3PPMWWJtoDzMg=="
+      },
       "Penumbra.Api": {
         "type": "Direct",
         "requested": "[5.19.1, )",

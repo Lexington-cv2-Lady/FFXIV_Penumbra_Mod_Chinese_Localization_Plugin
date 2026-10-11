@@ -34,6 +34,10 @@ public class Configuration : IPluginConfiguration
     /// <summary> 【默认开】Penumbra 更新/重下模组、把中文还原成英文后，自动用离线词典把译文覆盖回一次（只改 Name/Description 文本，绝不重置选项启用/选择状态；无需 Key、不联网）。可取消。 </summary>
     public bool AutoReHanhuaOnUpdate { get; set; } = true;
 
+    // ── wiki 提取：Cloudflare 验证接管（实验功能，默认关）──
+    /// <summary> 【默认关·实验】wiki 提取遇 Cloudflare 验证时，弹独立 WebView2 窗口让用户过点，插件自动接管 cf_clearance cookie 后继续。需游戏内实测，异常可随时关掉回到现状。 </summary>
+    public bool WikiCaptchaVerify { get; set; }
+
     // ── AI 翻译设置 ──
     /// <summary> 已选 AI 供应商（OpenAI 兼容端点预置表的下标；-1 = 手工自定义模式）。 </summary>
     public int AiProvider { get; set; }
