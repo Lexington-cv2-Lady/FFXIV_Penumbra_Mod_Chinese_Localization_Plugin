@@ -142,7 +142,7 @@ public class WikiExportWindow : Window, IDisposable
                 // -4 = 遇到 Cloudflare 验证且开启接管 → 弹独立 WebView2 窗口让用户过点
                 if (n == -4 && cfg.WikiCaptchaVerify && _wiki.PendingCaptchaUrl != null && _captcha == null)
                 {
-                    _captcha = new WikiCaptchaWindow();
+                    _captcha = new WikiCaptchaWindow(_plugin.AppLog);
                     _captcha.Start(_wiki.PendingCaptchaUrl!);
                     _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已弹出 wiki 验证窗口：请在窗口内完成 Cloudflare 验证，插件将自动接管 cookie 并继续提取。";
                 }

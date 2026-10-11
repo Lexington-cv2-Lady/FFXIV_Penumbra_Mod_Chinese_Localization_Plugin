@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using FFXIVPenumbraHanhua.Services;
 using Microsoft.Web.WebView2.Core;
 
 namespace FFXIVPenumbraHanhua.Windows;
@@ -82,6 +83,10 @@ internal sealed class WikiCaptchaWindow : IDisposable
     private volatile string? _cookie;
     private volatile bool _failed;
     private volatile bool _closedByUser;
+    private readonly AppLog _log;
+
+    /// <summary> 传入插件日志，把 WebView2 初始化/轮询的**原因**落盘（此前吞异常导致只有间接线索、难定位）。 </summary>
+    public WikiCaptchaWindow(AppLog log) => _log = log;
 
     /// <summary> 窗口是否仍在（等待用户过点）。 </summary>
     public bool IsActive => _hwnd != IntPtr.Zero;
@@ -101,8 +106,10 @@ internal sealed class WikiCaptchaWindow : IDisposable
         try
         {
             _current = this;
+            _log.Info($"[验证] 启动 WebView2 验证窗口：{url}");
             if (!EnsureClass())
             {
+                _log.Error("[验证] 注册窗口类失败（RegisterClassEx 返回 0）");
                 _failed = true;
                 return;
             }
@@ -111,14 +118,17 @@ internal sealed class WikiCaptchaWindow : IDisposable
                 WS_OVERLAPPEDWINDOW, 220, 160, 680, 820, IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero);
             if (_hwnd == IntPtr.Zero)
             {
+                _log.Error($"[验证] 创建验证窗口失败（CreateWindowEx 返回 0，错误码 {Marshal.GetLastWin32Error()}）");
                 _failed = true;
                 return;
             }
             ShowWindow(_hwnd, SW_SHOW);
+            _log.Info("[验证] 窗口已创建，正在异步初始化 WebView2…");
             _ = InitAsync(url); // fire-and-forget：异步初始化，主线程继续渲染/泵消息
         }
-        catch
+        catch (Exception ex)
         {
+            _log.Error($"[验证] 启动验证窗口异常：{ex.GetType().Name} {ex.Message}");
             _failed = true;
         }
     }
@@ -163,9 +173,12 @@ internal sealed class WikiCaptchaWindow : IDisposable
         {
             var dataFolder = Path.Combine(Path.GetTempPath(), "pmh_wiki_captcha_webview");
             Directory.CreateDirectory(dataFolder);
+            _log.Info($"[验证] 正在创建 WebView2 环境（用户数据目录：{dataFolder}）…");
             var env = await CoreWebView2Environment.CreateAsync(dataFolder);
-            if (_hwnd == IntPtr.Zero) return;
+            if (_hwnd == IntPtr.Zero) { _log.Warn("[验证] 窗口已关闭，放弃初始化"); return; }
+            _log.Info("[验证] WebView2 环境就绪，正在绑定控制器…");
             _controller = await env.CreateCoreWebView2ControllerAsync(_hwnd);
+            _log.Info("[验证] WebView2 控制器已绑定，开始导航…");
             var settings = _controller.CoreWebView2.Settings;
             settings.AreDefaultContextMenusEnabled = false;
             settings.AreDevToolsEnabled = false;
@@ -173,8 +186,9 @@ internal sealed class WikiCaptchaWindow : IDisposable
             _controller.CoreWebView2.Navigate(url);
             _ = PollCookieAsync(url);
         }
-        catch
+        catch (Exception ex)
         {
+            _log.Error($"[验证] WebView2 初始化失败：{ex.GetType().Name} {ex.Message}");
             _failed = true;
         }
     }
@@ -194,13 +208,17 @@ internal sealed class WikiCaptchaWindow : IDisposable
                     if (c.Name == "cf_clearance" && !string.IsNullOrEmpty(c.Value))
                     {
                         _cookie = c.Value;
+                        _log.Info("[验证] 已捕获 cf_clearance cookie（长度 " + c.Value.Length + "），准备交回插件");
                         break;
                     }
                 }
             }
+            if (_cookie == null && !_failed && !_closedByUser)
+                _log.Warn("[验证] 轮询超时，未捕获到 cf_clearance cookie");
         }
-        catch
+        catch (Exception ex)
         {
+            _log.Error($"[验证] 轮询 cookie 失败：{ex.GetType().Name} {ex.Message}");
             _failed = true;
         }
     }
