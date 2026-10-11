@@ -80,7 +80,7 @@ public sealed class WikiExportService
         _http.Timeout = TimeSpan.FromSeconds(30);
         if (enableWebView2)
         {
-            _wv2 = new WebView2WikiFetcher();
+            _wv2 = new WebView2WikiFetcher(_log);
             _wv2.Start(); // 独立线程异步初始化；未就绪/失败自动回退 curl 路径
         }
     }

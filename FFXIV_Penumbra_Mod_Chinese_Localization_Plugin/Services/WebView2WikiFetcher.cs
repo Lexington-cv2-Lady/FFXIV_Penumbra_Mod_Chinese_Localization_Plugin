@@ -90,6 +90,11 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private IntPtr _hwnd;
     private bool _disposed;
 
+    private readonly AppLog _log;
+
+    /// <summary> 传入日志以便把初始化/fetch 失败原因落盘（诊断必需，否则黑盒）。 </summary>
+    public WebView2WikiFetcher(AppLog log) => _log = log;
+
     public bool IsAvailable => _available;
     public string? LastError => _lastError;
 
@@ -143,6 +148,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
             catch (Exception ex)
             {
                 _lastError = ex.Message;
+                _log.Error($"[wv2] fetch 失败：{ex.GetType().Name} {ex.Message}");
                 tcs.TrySetResult(null);
             }
         });
@@ -224,8 +230,10 @@ internal sealed class WebView2WikiFetcher : IDisposable
         {
             var dataFolder = Path.Combine(Path.GetTempPath(), "pmh_wiki_webview");
             Directory.CreateDirectory(dataFolder);
+            _log.Info("[wv2] 正在创建 WebView2 环境…");
             var env = await CoreWebView2Environment.CreateAsync(dataFolder);
             _ctl = await env.CreateCoreWebView2ControllerAsync(_hwnd);
+            _log.Info("[wv2] 控制器已绑定，导航同源页…");
             var nav = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _ctl.CoreWebView2.NavigationCompleted += (_, a) =>
             {
@@ -237,16 +245,19 @@ internal sealed class WebView2WikiFetcher : IDisposable
             if (!ok)
             {
                 _lastError = "WebView2 导航同源页失败";
+                _log.Error("[wv2] 导航同源页失败");
                 _readyTcs?.TrySetResult(false);
                 return;
             }
             _available = true;
+            _log.Info("[wv2] WebView2 直抓已就绪（真实浏览器指纹，CDN 应放行）");
             _readyTcs?.TrySetResult(true);
         }
         catch (Exception ex)
         {
             _lastError = ex.Message;
             _available = false;
+            _log.Error($"[wv2] WebView2 初始化失败：{ex.GetType().Name} {ex.Message}");
             _readyTcs?.TrySetResult(false);
         }
     }
