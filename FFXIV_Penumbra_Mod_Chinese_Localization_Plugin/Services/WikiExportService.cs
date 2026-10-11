@@ -43,6 +43,9 @@ public sealed class WikiExportService
     /// <summary> Cloudflare 验证 cookie 缓存（用户过点后注入，后续请求自动携带）。 </summary>
     private readonly CaptchaCookieStore _cookie = new();
 
+    /// <summary> 可选的 WebView2 抓取器（真实浏览器指纹取数，绕开 CDN 对脚本的风控）；null=只用 curl。 </summary>
+    private readonly WebView2WikiFetcher? _wv2;
+
     /// <summary> 本轮是否因缺 cf_clearance 而触发「需要用户验证」（供 UI 弹 WebView2 窗口）。 </summary>
     public bool NeedsCaptcha { get; private set; }
 
@@ -78,12 +81,17 @@ public sealed class WikiExportService
 
     public string LastResult { get; private set; } = "";
 
-    public WikiExportService(AppLog log)
+    public WikiExportService(AppLog log, bool enableWebView2 = false)
     {
         _log = log;
         _http = new HttpClient();
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentValue);
         _http.Timeout = TimeSpan.FromSeconds(30);
+        if (enableWebView2)
+        {
+            _wv2 = new WebView2WikiFetcher();
+            _wv2.Start(); // 独立线程异步初始化；未就绪/失败自动回退 curl 路径
+        }
     }
 
     /// <summary>
@@ -121,7 +129,10 @@ public sealed class WikiExportService
             if (ct.IsCancellationRequested) return (null, false);
             if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false);
 
-        var body = await TryCurlAsync(url, CookieHeader(), ct).ConfigureAwait(false)
+        // 取数优先级：WebView2（真实浏览器指纹，CDN 放行）→ curl → HttpClient。
+        // WebView2 未就绪/失败即回退，故「WebView2 不可用」只会退回现状，不会让功能更差。
+        var body = await FetchViaWebView2(url, ct).ConfigureAwait(false)
+                   ?? await TryCurlAsync(url, CookieHeader(), ct).ConfigureAwait(false)
                    ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
 
         if (body != null)
@@ -166,6 +177,10 @@ public sealed class WikiExportService
             return false;
         }
     }
+
+    /// <summary> WebView2（真实浏览器指纹）取数；未启用/未就绪/失败均返回 null，交回 curl 路径。 </summary>
+    private Task<string?> FetchViaWebView2(string url, CancellationToken ct)
+        => _wv2 != null && _wv2.IsAvailable ? _wv2.FetchAsync(url, ct) : Task.FromResult<string?>(null);
 
     /// <summary> HttpClient 兜底取数（curl 缺失/失败时）。 </summary>
     private async Task<string?> TryHttpAsync(string url, CancellationToken ct)

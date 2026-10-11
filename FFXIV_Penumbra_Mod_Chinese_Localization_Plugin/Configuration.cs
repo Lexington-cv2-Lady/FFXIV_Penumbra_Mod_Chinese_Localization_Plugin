@@ -38,6 +38,9 @@ public class Configuration : IPluginConfiguration
     /// <summary> 【默认开】wiki 提取遇 Cloudflare 验证时，提供「系统浏览器过点 → 粘贴 cf_clearance cookie」通路；粘回后插件缓存 cookie 并自动从断点续跑。 </summary>
     public bool WikiCaptchaVerify { get; set; } = true;
 
+    /// <summary> 【默认开·实验】wiki 抓取改用 WebView2（真实浏览器指纹，绕开 CDN 对脚本客户端的 Cloudflare 风控）。未就绪/失败自动回退 curl；需本机装有 WebView2 Runtime（Win11 预装、Win10 常需手动装）。 </summary>
+    public bool EnableWebView2Fetch { get; set; } = true;
+
     // ── AI 翻译设置 ──
     /// <summary> 已选 AI 供应商（OpenAI 兼容端点预置表的下标；-1 = 手工自定义模式）。 </summary>
     public int AiProvider { get; set; }

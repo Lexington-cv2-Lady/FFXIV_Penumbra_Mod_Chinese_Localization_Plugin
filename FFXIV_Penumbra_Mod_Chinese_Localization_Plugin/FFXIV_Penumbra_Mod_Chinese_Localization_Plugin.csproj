@@ -41,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
     <PackageReference Include="Penumbra.Api" Version="5.19.1" />
   </ItemGroup>
 
@@ -57,6 +58,16 @@
       <_LibDeps Include="lib\Microsoft.Extensions*.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(_LibDeps)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- WebView2 的 native loader 必须随插件部署（WebView2 初始化按同目录找 WebView2Loader.dll，
+       缺失会命中系统旧版导致版本错配）。x64 loader 复制到输出目录，DeployToDev 带进 devPlugins。 -->
+  <Target Name="CopyWebView2Loader" AfterTargets="Build">
+    <ItemGroup>
+      <_Wv2Loader Include="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2792.45\runtimes\win-x64\native\WebView2Loader.dll"
+                  Condition="Exists('$(NuGetPackageRoot)microsoft.web.webview2\1.0.2792.45\runtimes\win-x64\native\WebView2Loader.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_Wv2Loader)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- DependsOn 打包器：DalamudPackager 的 targets 在 SDK 末尾导入、晚于本文件执行；
