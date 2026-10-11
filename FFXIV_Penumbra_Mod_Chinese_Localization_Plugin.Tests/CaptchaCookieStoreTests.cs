@@ -77,4 +77,44 @@ public class CaptchaCookieStoreTests
         s.Set("  token123  ", 60, T0);
         Assert.Equal("cf_clearance=token123", s.Header(T0));
     }
+
+    // ============ ExtractCfClearance：从粘贴文本提取 cookie 值 ============
+
+    [Fact]
+    public void Extract_纯值原样返回()
+    {
+        Assert.Equal("abc123", CaptchaCookieStore.ExtractCfClearance("abc123"));
+    }
+
+    [Fact]
+    public void Extract_键值对形态取等号后()
+    {
+        Assert.Equal("abc123", CaptchaCookieStore.ExtractCfClearance("cf_clearance=abc123"));
+    }
+
+    [Fact]
+    public void Extract_整段Cookie串中定位cf_clearance()
+    {
+        var raw = "other=xyz; cf_clearance=abc123; more=1";
+        Assert.Equal("abc123", CaptchaCookieStore.ExtractCfClearance(raw));
+    }
+
+    [Fact]
+    public void Extract_大小写不敏感且容忍空白()
+    {
+        Assert.Equal("abc123", CaptchaCookieStore.ExtractCfClearance("  CF_CLEARANCE = abc123  "));
+    }
+
+    [Fact]
+    public void Extract_去除外围引号()
+    {
+        Assert.Equal("abc123", CaptchaCookieStore.ExtractCfClearance("\"cf_clearance=abc123\""));
+    }
+
+    [Fact]
+    public void Extract_空或空白返回null()
+    {
+        Assert.Null(CaptchaCookieStore.ExtractCfClearance(null));
+        Assert.Null(CaptchaCookieStore.ExtractCfClearance("   "));
+    }
 }

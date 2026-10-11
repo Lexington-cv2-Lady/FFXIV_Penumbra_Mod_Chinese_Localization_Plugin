@@ -2,13 +2,8 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>1.1.8.2</Version>
-    <!-- WebView2 SDK 版本（集中一处；PackageReference 与 native loader 复制共用，升版只改这里） -->
-    <WebView2Version>1.0.4258.31</WebView2Version>
     <!-- 禁用 NuGet 漏洞审计：本机到 api.nuget.org 的链路被重置，审计失败会刷 NU1900 噪声警告（与代码无关） -->
     <NuGetAudit>false</NuGetAudit>
-    <!-- 抑制 MSB3277（WindowsBase 4.0/5.0 冲突）：冲突源是 WebView2 主包附带、本项目并不使用的 Wpf.dll；
-         运行时只加载 CoreWebView2（Core.dll），不会触碰 Wpf，故此冲突不影响功能。 -->
-    <NoWarn>$(NoWarn);MSB3277</NoWarn>
     <!-- 插件 ID（InternalName）= 程序集名，必须为 ASCII；显示名（Name）用中文。 -->
     <AssemblyName>FFXIV_Penumbra_Mod_Chinese_Localization_Plugin</AssemblyName>
     <!-- 不从 NuGet 包复制 pdb 调试符号（保持输出目录整洁） -->
@@ -46,11 +41,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- wiki 提取的 Cloudflare 验证接管：用独立 Win32 窗口承载 WebView2（CoreWebView2Controller），
-         用户手动过点后插件读取 cf_clearance cookie。
-         用主包（Core.dll 已内含其中）。独立的 Microsoft.Web.WebView2.Core 包在国内镜像（华为云/腾讯云）
-         均未同步，故引主包；主包附带、本项目并不使用的 Wpf.dll 其 WindowsBase 冲突已用 NoWarn 抑制。 -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="$(WebView2Version)" />
     <PackageReference Include="Penumbra.Api" Version="5.19.1" />
   </ItemGroup>
 
@@ -69,21 +59,9 @@
     <Copy SourceFiles="@(_LibDeps)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- WebView2 的 native loader 必须随插件部署：WebView2 初始化会按同目录加载 WebView2Loader.dll（native x64）。
-       若缺失，Windows 会命中系统其它路径的旧版 loader（如 E:\Windows Kits\...\WebView2Loader.dll 1.0.864.35），
-       与新版 Core.dll 版本错配 → 初始化失败（2026-10-11 实测）。故显式复制到输出目录，
-       DeployToDev 随之带进 devPlugins。 -->
-  <Target Name="CopyWebView2Loader" AfterTargets="Build">
-    <ItemGroup>
-      <_Wv2Loader Include="$(NuGetPackageRoot)microsoft.web.webview2\$(WebView2Version)\runtimes\win-x64\native\WebView2Loader.dll"
-                  Condition="Exists('$(NuGetPackageRoot)microsoft.web.webview2\$(WebView2Version)\runtimes\win-x64\native\WebView2Loader.dll')" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_Wv2Loader)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
-  </Target>
-
   <!-- DependsOn 打包器：DalamudPackager 的 targets 在 SDK 末尾导入、晚于本文件执行；
        不加依赖时 DeployToDev 会先复制“上一次”生成的旧 manifest（例如 RepoUrl 不同步更新）。 -->
-  <Target Name="DeployToDev" AfterTargets="Build" DependsOnTargets="CopyLunaDeps;CopyWebView2Loader;DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
+  <Target Name="DeployToDev" AfterTargets="Build" DependsOnTargets="CopyLunaDeps;DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
     <ItemGroup>
       <_DeployFiles Include="$(TargetDir)*" Exclude="$(TargetDir)*.pdb" />
       <_DeployFiles Include="$(TargetDir)*\*" />

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,11 +25,14 @@ public class WikiExportWindow : Window, IDisposable
     private string _result = "";
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
-    private WikiCaptchaWindow? _captcha;  // Cloudflare 验证窗口（实验功能；主线程轮询）
+
+    // B 方案（零依赖）：撞 Cloudflare 验证时，用系统浏览器过点后把 cf_clearance cookie 粘回，自动续跑。
+    private string? _pendingCaptchaUrl;   // 待过点的验证 URL
+    private string _captchaCookieInput = "";
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
-        Size = new Vector2(1280, 500); // 默认放宽：勾选行单行排到「种族（Race）」不被裁
+        Size = new Vector2(1280, 500);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
@@ -38,16 +42,10 @@ public class WikiExportWindow : Window, IDisposable
         _plugin = plugin;
         _wiki = plugin.Wiki;
         _catChecked = new bool[WikiExportService.Categories.Count];
-        // 默认全勾选（列表已精简为灰机 wiki 实测有数据的分类）
         for (var i = 0; i < _catChecked.Length; i++) _catChecked[i] = true;
     }
 
-    public void Dispose()
-    {
-        _cts?.Cancel();
-        _captcha?.Dispose();
-        _captcha = null;
-    }
+    public void Dispose() => _cts?.Cancel();
 
     public override void Draw()
     {
@@ -59,9 +57,8 @@ public class WikiExportWindow : Window, IDisposable
         Ui.Hint("注意：该功能可能因灰机 wiki 的风控而暂时失效。");
         Ui.Hint("请求已内置节流（约 0.7 秒/次）；若日志提示被 CDN 风控拦截，请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
         ImGui.Spacing();
-        // 实验开关：默认关。开启后遇 Cloudflare 验证会弹独立 WebView2 窗口让用户过点，插件自动接管 cookie 续跑。
         var captchaOn = cfg.WikiCaptchaVerify;
-        if (ImGui.Checkbox("启用 wiki 验证接管（遇 Cloudflare 验证弹独立窗口；实验功能，需游戏内实测）##WikiCaptcha", ref captchaOn))
+        if (ImGui.Checkbox("启用 wiki 验证接管（撞验证时用浏览器过点并粘贴 cookie，自动续跑）##WikiCaptcha", ref captchaOn))
         {
             cfg.WikiCaptchaVerify = captchaOn;
             cfg.Save();
@@ -83,7 +80,6 @@ public class WikiExportWindow : Window, IDisposable
         {
             ImGui.TextUnformatted("勾选要提取的分类（未勾选不抓取）：");
             ImGui.Spacing();
-            // 单行排列：窗口默认已放宽到能完整显示到「种族（Race）」
             for (var i = 0; i < WikiExportService.Categories.Count; i++)
             {
                 if (i > 0) ImGui.SameLine();
@@ -126,8 +122,7 @@ public class WikiExportWindow : Window, IDisposable
 
         ImGui.Spacing();
 
-        // 日志结果区：带边框统一风格；高度自适应（矮窗口收缩，最高 200）。默认自动跟随底部，
-        // 但用户手动上滑看历史时不抢滚动条（ResultBox 内部按是否贴底判定）。
+        // 日志结果区
         var boxH = Math.Min(200f, Math.Max(100f, ImGui.GetContentRegionAvail().Y));
         Plugin.ResultBox("##WikiResult", _result, "提取日志将显示在这里（进度 / 新增 / 命中已有 / 拒绝数…）", boxH, true);
 
@@ -137,14 +132,15 @@ public class WikiExportWindow : Window, IDisposable
             try
             {
                 var n = _task.Result;
-                if (n != 0) _plugin.ReloadDictionary(); // 取消(-2)时也可能已写入部分词条，需重载
+                if (n != 0) _plugin.ReloadDictionary();
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
-                // -4 = 遇到 Cloudflare 验证且开启接管 → 弹独立 WebView2 窗口让用户过点
-                if (n == -4 && cfg.WikiCaptchaVerify && _wiki.PendingCaptchaUrl != null && _captcha == null)
+                // -4 = 遇到 Cloudflare 验证且开启接管 → 自动复制验证链接，准备浏览器过点+粘 cookie
+                if (n == -4 && cfg.WikiCaptchaVerify && _wiki.PendingCaptchaUrl != null)
                 {
-                    _captcha = new WikiCaptchaWindow(_plugin.AppLog);
-                    _captcha.Start(_wiki.PendingCaptchaUrl!);
-                    _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已弹出 wiki 验证窗口：请在窗口内完成 Cloudflare 验证，插件将自动接管 cookie 并继续提取。";
+                    _pendingCaptchaUrl = _wiki.PendingCaptchaUrl;
+                    ImGui.SetClipboardText(_pendingCaptchaUrl);
+                    _result += (_result.Length > 0 ? "\n" : "")
+                               + "[提示] 检测到 Cloudflare 验证：已把验证链接复制到剪贴板。请用浏览器过点后，把 cf_clearance cookie 粘到窗口下方，插件将自动从断点继续。";
                 }
             }
             finally
@@ -155,40 +151,66 @@ public class WikiExportWindow : Window, IDisposable
             }
         }
 
-        PollCaptcha(dictOk ? dictDir : null);
+        DrawCaptchaPanel(dictOk ? dictDir : null);
     }
 
-    /// <summary>
-    /// 主线程轮询 Cloudflare 验证窗口：拿到 cookie 则注入并自动从断点续跑；
-    /// 失败/用户取消则关闭并回退（不阻断其它功能）。
-    /// </summary>
-    private void PollCaptcha(string? dictDir)
+    /// <summary> 验证面板（B 方案）：打开/复制验证链接 + cf_clearance cookie 回填，收到后自动续跑。 </summary>
+    private void DrawCaptchaPanel(string? dictDir)
     {
-        if (_captcha == null) return;
+        if (_pendingCaptchaUrl == null) return;
 
-        if (_captcha.HasCookie)
+        ImGui.Separator();
+        ImGui.TextWrapped("撞到 Cloudflare 验证。请用浏览器打开下方链接完成验证，然后把 cf_clearance cookie 粘到下面，插件会自动从断点继续：");
+        if (ImGui.Button("用浏览器打开验证页##OpenUrl"))
         {
-            var ck = _captcha.TakeCookie();
-            _captcha.Dispose();
-            _captcha = null;
-            if (!string.IsNullOrEmpty(ck) && dictDir != null)
-            {
-                _wiki.SetCaptchaCookie(ck!, CaptchaTtlMinutes);
-                _result += (_result.Length > 0 ? "\n" : "") + "[完成] 已获取 Cloudflare 验证 cookie，自动继续提取…";
-                StartExtract(dictDir); // 从已保存的断点续跑
-            }
-            return;
+            OpenUrl(_pendingCaptchaUrl);
         }
-
-        if (_captcha.Failed || _captcha.ClosedByUser || !_captcha.IsActive)
+        ImGui.SameLine();
+        if (ImGui.Button("复制验证链接##CopyUrl"))
         {
-            var failed = _captcha.Failed;
-            _captcha.Dispose();
-            _captcha = null;
-            _result += (_result.Length > 0 ? "\n" : "")
-                       + (failed
-                           ? "[提示] 验证窗口不可用（WebView2 初始化失败），已回退。可关闭「wiki 验证接管」或稍后重试。"
-                           : "[提示] 已取消 Cloudflare 验证。");
+            ImGui.SetClipboardText(_pendingCaptchaUrl);
+            _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已复制验证链接到剪贴板。";
+        }
+        Ui.Hint("验证链接：");
+        ImGui.TextWrapped(_pendingCaptchaUrl);
+        Ui.Hint("在验证页完成验证后，按 F12 → Application（应用）→ Cookies → 找到 cf_clearance → 复制其值，粘贴到下面：");
+        ImGui.InputTextWithHint("##cfck", "粘贴 cf_clearance cookie 值（或含 cf_clearance= 的整段 Cookie）", ref _captchaCookieInput, 8192);
+        ImGui.SameLine();
+        if (ImGui.Button("确定并继续##CfOk"))
+        {
+            var val = CaptchaCookieStore.ExtractCfClearance(_captchaCookieInput);
+            if (val != null && dictDir != null)
+            {
+                _wiki.SetCaptchaCookie(val, CaptchaTtlMinutes);
+                _pendingCaptchaUrl = null;
+                _captchaCookieInput = "";
+                _result += (_result.Length > 0 ? "\n" : "") + "[完成] 已接收 cookie，自动从断点继续提取…";
+                StartExtract(dictDir);
+            }
+            else
+            {
+                _result += (_result.Length > 0 ? "\n" : "") + "[错误] 未能识别 cookie 值，请粘贴 cf_clearance 的值。";
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("放弃验证##CfCancel"))
+        {
+            _pendingCaptchaUrl = null;
+            _captchaCookieInput = "";
+            _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已放弃验证。";
+        }
+        ImGui.Spacing();
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch
+        {
+            /* 打开失败可忽略：仍可手动复制链接 */
         }
     }
 
@@ -208,7 +230,6 @@ public class WikiExportWindow : Window, IDisposable
         }
         else
         {
-            // 汇总提取：固定抓取有数据的分类（Race 为固定词表，提取时自动并入）
             prefixes.AddRange(new[] { "Item/", "Action/", "Quest/", "Achievement/", "Emote/" });
         }
 

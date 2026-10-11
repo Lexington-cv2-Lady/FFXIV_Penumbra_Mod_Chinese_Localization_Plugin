@@ -42,4 +42,28 @@ internal sealed class CaptchaCookieStore
         _value = null;
         _expiryUtc = default;
     }
+
+    /// <summary>
+    /// 从用户粘贴的文本中提取 cf_clearance 的值（纯函数，便于单测）。
+    /// 容忍三种常见形态：① 纯值 <c>abc</c>；② <c>cf_clearance=abc</c>；③ 整段 Cookie 串 <c>cf_clearance=abc; other=…</c>。
+    /// </summary>
+    public static string? ExtractCfClearance(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().Trim('"', '\'');
+        foreach (var part in s.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var p = part.Trim();
+            var eq = p.IndexOf('=');
+            if (eq <= 0) continue;
+            var name = p[..eq].Trim();
+            if (name.Equals("cf_clearance", StringComparison.OrdinalIgnoreCase))
+            {
+                var v = p[(eq + 1)..].Trim().Trim('"', '\'');
+                if (v.Length > 0) return v;
+            }
+        }
+        // 不含 key=value 形态：视为纯 cookie 值
+        return s.Length > 0 ? s : null;
+    }
 }
