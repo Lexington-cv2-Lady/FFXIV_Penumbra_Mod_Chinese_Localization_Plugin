@@ -143,7 +143,17 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 var script = $"fetch({JsonSerializer.Serialize(url)}).then(r=>r.text())";
                 var raw = await _ctl!.CoreWebView2.ExecuteScriptAsync(script);
                 // ExecuteScriptAsync 返回 JSON 序列化的 JS 结果（一个字符串）→ 反序列化还原
-                tcs.TrySetResult(JsonSerializer.Deserialize<string>(raw));
+                var text = JsonSerializer.Deserialize<string>(raw);
+                if (text == null)
+                {
+                    _log.Warn("[wv2] fetch 返回 null（页面可能未加载完成，无法执行脚本）");
+                    tcs.TrySetResult(null);
+                }
+                else
+                {
+                    _log.Info($"[wv2] fetch 成功，返回 {text.Length} 字符{(CloudflareChallengeDetector.IsChallenge(text) ? "（⚠ 是 Cloudflare 挑战页）" : "")}");
+                    tcs.TrySetResult(text);
+                }
             }
             catch (Exception ex)
             {
@@ -249,13 +259,17 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 else nav.TrySetResult(false);
             };
             _ctl.CoreWebView2.Navigate(WikiOriginUrl);
-            var ok = await nav.Task;
+            // 超时兜底：同源页可能因 CF 挑战/网络一直不触发 NavigationCompleted，
+            // 不能无限等——超时后标记可用，让 fetch 自行尝试（同源与否由 fetch 结果说话）。
+            var ok = await nav.Task.WaitAsync(TimeSpan.FromSeconds(20));
             if (!ok)
             {
-                _lastError = "WebView2 导航同源页失败";
-                _log.Error("[wv2] 导航同源页失败");
-                _readyTcs?.TrySetResult(false);
-                return;
+                _lastError = "WebView2 导航同源页未完成（超时）";
+                _log.Warn("[wv2] 导航同源页未完成（20s 超时），仍尝试直接 fetch");
+            }
+            else
+            {
+                _log.Info("[wv2] 同源页导航完成");
             }
             _available = true;
             _log.Info("[wv2] WebView2 直抓已就绪（真实浏览器指纹，CDN 应放行）");
