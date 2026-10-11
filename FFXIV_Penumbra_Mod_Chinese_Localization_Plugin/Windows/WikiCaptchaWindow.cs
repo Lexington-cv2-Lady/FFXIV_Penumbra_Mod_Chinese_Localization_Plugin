@@ -67,7 +67,9 @@ internal sealed class WikiCaptchaWindow : IDisposable
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-    private const string ClassName = "PMHWikiCaptchaWindow";
+    /// <summary> 窗口类名：每次 DLL 加载（热重载）生成唯一后缀。RegisterClassEx 对**已存在**的类名返回 0(1410)，
+    /// 而窗口类不会随窗口销毁注销；固定类名会让第二次热重载必然注册失败（2026-10-11 实测踩中）。 </summary>
+    private static readonly string ClassName = "PMHWikiCaptchaWindow_" + Guid.NewGuid().ToString("N");
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int SW_SHOW = 5;
     private const int IDC_ARROW = 32512;
@@ -146,7 +148,16 @@ internal sealed class WikiCaptchaWindow : IDisposable
             hCursor = LoadCursor(IntPtr.Zero, (IntPtr)IDC_ARROW),
             lpszClassName = ClassName,
         };
-        if (RegisterClassEx(ref wc) == 0) return false;
+        if (RegisterClassEx(ref wc) == 0)
+        {
+            // 1410 = ERROR_CLASS_ALREADY_EXISTS：极端情况下类已存在，可直接复用
+            if (Marshal.GetLastWin32Error() == 1410)
+            {
+                _classRegistered = true;
+                return true;
+            }
+            return false;
+        }
         _classRegistered = true;
         return true;
     }
