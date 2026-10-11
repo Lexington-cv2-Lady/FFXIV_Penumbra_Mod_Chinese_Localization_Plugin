@@ -40,17 +40,8 @@ public sealed class WikiExportService
     private readonly AppLog _log;
     private readonly HttpClient _http;
 
-    /// <summary> Cloudflare 验证 cookie 缓存（用户过点后注入，后续请求自动携带）。 </summary>
-    private readonly CaptchaCookieStore _cookie = new();
-
     /// <summary> 可选的 WebView2 抓取器（真实浏览器指纹取数，绕开 CDN 对脚本的风控）；null=只用 curl。 </summary>
     private readonly WebView2WikiFetcher? _wv2;
-
-    /// <summary> 本轮是否因缺 cf_clearance 而触发「需要用户验证」（供 UI 弹 WebView2 窗口）。 </summary>
-    public bool NeedsCaptcha { get; private set; }
-
-    /// <summary> 触发验证时被拦的 URL（可交给 WebView2 加载并过点）。 </summary>
-    public string? PendingCaptchaUrl { get; private set; }
 
     /// <summary> 抓取用 UA（curl 与 HttpClient 共用）。 </summary>
     private const string UserAgentValue = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua";
@@ -95,23 +86,6 @@ public sealed class WikiExportService
     }
 
     /// <summary>
-    /// 注入用户手动通过 Cloudflare 验证后拿到的 cf_clearance cookie（由 UI 层 WebView2 窗口读取后回填）。
-    /// ttlMinutes 为保守有效期；&lt;=0 时按 30 分钟。
-    /// </summary>
-    public void SetCaptchaCookie(string value, int ttlMinutes)
-    {
-        _cookie.Set(value, ttlMinutes, DateTime.UtcNow);
-        if (_cookie.Has(DateTime.UtcNow))
-        {
-            NeedsCaptcha = false;
-            PendingCaptchaUrl = null;
-        }
-    }
-
-    /// <summary> 当前应附加到请求的 Cookie 头值（无有效 cookie 返回 null）。 </summary>
-    private string? CookieHeader() => _cookie.Header(DateTime.UtcNow);
-
-    /// <summary>
     /// 取数据页正文（含节流与退避）。
     /// 灰机 wiki 的 CDN 是 Cloudflare。早期它主要按 TLS 握手指纹（JA3/JA4）打分，.NET 的 SChannel 指纹会被拦，
     /// 故仍优先用系统自带 curl.exe（指纹更接近浏览器）。
@@ -132,27 +106,14 @@ public sealed class WikiExportService
         // 取数优先级：WebView2（真实浏览器指纹，CDN 放行）→ curl → HttpClient。
         // WebView2 未就绪/失败即回退，故「WebView2 不可用」只会退回现状，不会让功能更差。
         var body = await FetchViaWebView2(url, ct).ConfigureAwait(false)
-                   ?? await TryCurlAsync(url, CookieHeader(), ct).ConfigureAwait(false)
+                   ?? await TryCurlAsync(url, ct).ConfigureAwait(false)
                    ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
 
         if (body != null)
         {
             // 拿到内容但是 Cloudflare 挑战页：确认被风控，立刻上报，不再重试
             if (CloudflareChallengeDetector.IsChallenge(body))
-            {
-                // 缺 cf_clearance：置标志，交由 UI 弹 WebView2 让用户手动过点、带 cookie 重跑；
-                // 若已带 cookie 仍被拦，说明 cookie 失效或仍触发风控，按原样中止（不重复弹窗）。
-                if (!_cookie.Has(DateTime.UtcNow))
-                {
-                    NeedsCaptcha = true;
-                    PendingCaptchaUrl = url;
-                }
-                else
-                {
-                    _cookie.Clear();
-                }
                 return (null, true);
-            }
             return (body, false);
         }
 
@@ -188,9 +149,6 @@ public sealed class WikiExportService
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            var cookie = CookieHeader();
-            if (!string.IsNullOrEmpty(cookie))
-                req.Headers.TryAddWithoutValidation("Cookie", cookie);
             using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
             // 与原 GetStringAsync 语义一致：仅成功响应返回正文；非成功（含 403 挑战页）视为失败，
             // 交由 curl 路径/退避重试处理
@@ -220,7 +178,7 @@ public sealed class WikiExportService
         => nextAllowedAt > now ? (int)Math.Ceiling((nextAllowedAt - now).TotalMilliseconds) : 0;
 
     /// <summary> 用系统自带 curl.exe 抓取（返回正文；curl 缺失/失败返回 null）。 </summary>
-    private static async Task<string?> TryCurlAsync(string url, string? cookie, CancellationToken ct)
+    private static async Task<string?> TryCurlAsync(string url, CancellationToken ct)
     {
         Process? proc = null;
         try
@@ -241,11 +199,6 @@ public sealed class WikiExportService
             psi.ArgumentList.Add("30");
             psi.ArgumentList.Add("-A");
             psi.ArgumentList.Add(UserAgentValue);
-            if (!string.IsNullOrEmpty(cookie))
-            {
-                psi.ArgumentList.Add("-b");
-                psi.ArgumentList.Add(cookie);
-            }
             psi.ArgumentList.Add(url);
             proc = Process.Start(psi);
             if (proc == null) return null;
@@ -568,12 +521,6 @@ public sealed class WikiExportService
             }
             if (blockedGlobal)
             {
-                if (NeedsCaptcha)
-                {
-                    LastResult = "Wiki 提取遇到 Cloudflare 验证：请在弹出的验证窗口完成验证，插件将携带 cookie 自动继续";
-                    _log.Info(LastResult);
-                    return -4;
-                }
                 LastResult = "Wiki 提取被 CDN 风控拦截已中止（已抓取部分已保存；请间隔数十分钟或换网络后重试）";
                 _log.Info(LastResult);
                 return -3;

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,9 +13,6 @@ namespace FFXIVPenumbraHanhua.Windows;
 /// <summary> Wiki 提取窗口：从灰机 wiki 抓取官方中/英名，写入 词典目录\wiki_术语对照\。 </summary>
 public class WikiExportWindow : Window, IDisposable
 {
-    /// <summary> 验证 cookie 保守有效期（分钟）。cf_clearance 实际可存更久，过期后再过点即可。 </summary>
-    private const int CaptchaTtlMinutes = 60;
-
     private readonly Plugin _plugin;
     private readonly WikiExportService _wiki;
 
@@ -25,10 +21,6 @@ public class WikiExportWindow : Window, IDisposable
     private string _result = "";
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
-
-    // B 方案（零依赖）：撞 Cloudflare 验证时，用系统浏览器过点后把 cf_clearance cookie 粘回，自动续跑。
-    private string? _pendingCaptchaUrl;   // 待过点的验证 URL
-    private string _captchaCookieInput = "";
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -54,16 +46,31 @@ public class WikiExportWindow : Window, IDisposable
         var dictOk = !string.IsNullOrWhiteSpace(dictDir) && System.IO.Directory.Exists(dictDir);
 
         ImGui.TextWrapped("从灰机 wiki（cdn.huijiwiki.com/ff14）抓取 FFXIV 官方中/英名，写入 词典目录\\wiki_术语对照\\。");
-        Ui.Hint("注意：该功能可能因灰机 wiki 的风控而暂时失效。");
-        Ui.Hint("请求已内置节流（约 0.7 秒/次）；若日志提示被 CDN 风控拦截，请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
+        Ui.Hint("注意：该功能可能因灰机 wiki 的风控而暂时失效（CDN 拦截脚本客户端）。");
+        Ui.Hint("请求已内置节流（约 0.7 秒/次）；被风控拦截时请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
         ImGui.Spacing();
-        var captchaOn = cfg.WikiCaptchaVerify;
-        if (ImGui.Checkbox("启用 wiki 验证接管（撞验证时用浏览器过点并粘贴 cookie，自动续跑）##WikiCaptcha", ref captchaOn))
+
+        // WebView2 直抓开关：默认开（用真实浏览器指纹绕开 CDN 对脚本的风控）；未就绪/失败自动回退 curl。
+        var wv2On = cfg.EnableWebView2Fetch;
+        if (ImGui.Checkbox("启用 WebView2 抓取（真实浏览器指纹绕开 CDN 风控，需本机已装 WebView2 Runtime；改动后重载插件生效）##Wv2Fetch", ref wv2On))
         {
-            cfg.WikiCaptchaVerify = captchaOn;
+            cfg.EnableWebView2Fetch = wv2On;
             cfg.Save();
         }
+        // WebView2 环境预检：没装则提示 + 官方下载链接
+        var wv2Ver = WebView2RuntimeProbe.TryGetInstalledVersion();
+        if (wv2Ver == null)
+        {
+            Ui.Hint("检测到本机未安装 WebView2 Runtime，WebView2 抓取不可用（将回退 curl，多数情况下仍会被 CDN 拦截）。");
+            if (ImGui.Button("打开官方 WebView2 下载页##Wv2Dl"))
+                OpenUrl(WebView2RuntimeProbe.OfficialDownloadUrl);
+        }
+        else
+        {
+            Ui.Hint($"本机 WebView2 Runtime：{wv2Ver}");
+        }
         ImGui.Spacing();
+
         Ui.Hint($"词典目录：{dictDir}（{(dictOk ? "存在" : "不存在，请先在「目录和词典管理」里配置词典目录")}）");
         ImGui.Spacing();
         ImGui.Separator();
@@ -134,14 +141,6 @@ public class WikiExportWindow : Window, IDisposable
                 var n = _task.Result;
                 if (n != 0) _plugin.ReloadDictionary();
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
-                // -4 = 遇到 Cloudflare 验证且开启接管 → 自动复制验证链接，准备浏览器过点+粘 cookie
-                if (n == -4 && cfg.WikiCaptchaVerify && _wiki.PendingCaptchaUrl != null)
-                {
-                    _pendingCaptchaUrl = _wiki.PendingCaptchaUrl;
-                    ImGui.SetClipboardText(_pendingCaptchaUrl);
-                    _result += (_result.Length > 0 ? "\n" : "")
-                               + "[提示] 检测到 Cloudflare 验证：已把验证链接复制到剪贴板。请用浏览器过点后，把 cf_clearance cookie 粘到窗口下方，插件将自动从断点继续。";
-                }
             }
             finally
             {
@@ -150,71 +149,21 @@ public class WikiExportWindow : Window, IDisposable
                 _cts = null;
             }
         }
-
-        DrawCaptchaPanel(dictOk ? dictDir : null);
-    }
-
-    /// <summary> 验证面板（B 方案）：打开/复制验证链接 + cf_clearance cookie 回填，收到后自动续跑。 </summary>
-    private void DrawCaptchaPanel(string? dictDir)
-    {
-        if (_pendingCaptchaUrl == null) return;
-
-        ImGui.Separator();
-        ImGui.TextWrapped("撞到 Cloudflare 验证。请用浏览器打开下方链接完成验证，然后把 cf_clearance cookie 粘到下面，插件会自动从断点继续：");
-        if (ImGui.Button("用浏览器打开验证页##OpenUrl"))
-        {
-            OpenUrl(_pendingCaptchaUrl);
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("复制验证链接##CopyUrl"))
-        {
-            ImGui.SetClipboardText(_pendingCaptchaUrl);
-            _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已复制验证链接到剪贴板。";
-        }
-        Ui.Hint("验证链接：");
-        ImGui.TextWrapped(_pendingCaptchaUrl);
-        Ui.Hint("在验证页完成验证后，按 F12 → Application（应用）→ Cookies → 找到 cf_clearance → 复制其值，粘贴到下面：");
-        ImGui.InputTextWithHint("##cfck", "粘贴 cf_clearance cookie 值（或含 cf_clearance= 的整段 Cookie）", ref _captchaCookieInput, 8192);
-        ImGui.SameLine();
-        if (ImGui.Button("确定并继续##CfOk"))
-        {
-            var val = CaptchaCookieStore.ExtractCfClearance(_captchaCookieInput);
-            if (val != null && dictDir != null)
-            {
-                _wiki.SetCaptchaCookie(val, CaptchaTtlMinutes);
-                _pendingCaptchaUrl = null;
-                _captchaCookieInput = "";
-                _result += (_result.Length > 0 ? "\n" : "") + "[完成] 已接收 cookie，自动从断点继续提取…";
-                StartExtract(dictDir);
-            }
-            else
-            {
-                _result += (_result.Length > 0 ? "\n" : "") + "[错误] 未能识别 cookie 值，请粘贴 cf_clearance 的值。";
-            }
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("放弃验证##CfCancel"))
-        {
-            _pendingCaptchaUrl = null;
-            _captchaCookieInput = "";
-            _result += (_result.Length > 0 ? "\n" : "") + "[提示] 已放弃验证。";
-        }
-        ImGui.Spacing();
     }
 
     private static void OpenUrl(string url)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch
         {
-            /* 打开失败可忽略：仍可手动复制链接 */
+            /* 打开失败可忽略 */
         }
     }
 
-    /// <summary> 按当前勾选启动提取（供「开始提取」与验证后续跑复用）。 </summary>
+    /// <summary> 按当前勾选启动提取。 </summary>
     private void StartExtract(string dictDir)
     {
         var prefixes = new List<string>();

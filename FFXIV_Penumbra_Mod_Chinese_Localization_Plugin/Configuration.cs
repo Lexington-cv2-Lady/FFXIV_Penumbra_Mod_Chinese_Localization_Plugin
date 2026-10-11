@@ -34,10 +34,7 @@ public class Configuration : IPluginConfiguration
     /// <summary> 【默认开】Penumbra 更新/重下模组、把中文还原成英文后，自动用离线词典把译文覆盖回一次（只改 Name/Description 文本，绝不重置选项启用/选择状态；无需 Key、不联网）。可取消。 </summary>
     public bool AutoReHanhuaOnUpdate { get; set; } = true;
 
-    // ── wiki 提取：Cloudflare 验证接管（系统浏览器过点 + 粘贴 cookie，零额外依赖）──
-    /// <summary> 【默认开】wiki 提取遇 Cloudflare 验证时，提供「系统浏览器过点 → 粘贴 cf_clearance cookie」通路；粘回后插件缓存 cookie 并自动从断点续跑。 </summary>
-    public bool WikiCaptchaVerify { get; set; } = true;
-
+    // ── wiki 提取：WebView2 直抓（真实浏览器指纹，绕开 CDN 对脚本的 Cloudflare 风控）──
     /// <summary> 【默认开·实验】wiki 抓取改用 WebView2（真实浏览器指纹，绕开 CDN 对脚本客户端的 Cloudflare 风控）。未就绪/失败自动回退 curl；需本机装有 WebView2 Runtime（Win11 预装、Win10 常需手动装）。 </summary>
     public bool EnableWebView2Fetch { get; set; } = true;
 
