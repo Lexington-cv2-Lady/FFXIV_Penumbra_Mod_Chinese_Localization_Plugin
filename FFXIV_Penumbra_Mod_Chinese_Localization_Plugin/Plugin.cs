@@ -106,7 +106,8 @@ public sealed class Plugin : IDalamudPlugin
         Import = new ImportService(ModFiles, Penumbra, AppLog, Mark, Snapshot);
         Backup = new BackupManager(ModFiles, Penumbra, AppLog, Snapshot, Mark);
         Sumup = new SumupService(AppLog, ModFiles, Snapshot);
-        Wiki = new WikiExportService(AppLog, Configuration.EnableWebView2Fetch);
+        Wiki = new WikiExportService(AppLog, Configuration.EnableWebView2Fetch,
+            System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "WebView2Profile"));
         ModRestore = new ModRestoreService();
 
         MainWindow = new MainWindow(this, Penumbra, Dict, Hanhua);

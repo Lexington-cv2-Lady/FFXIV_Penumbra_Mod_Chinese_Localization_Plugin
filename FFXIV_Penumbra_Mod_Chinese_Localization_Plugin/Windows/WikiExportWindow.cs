@@ -21,6 +21,7 @@ public class WikiExportWindow : Window, IDisposable
     private string _result = "";
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
+    private string? _captchaUrl;   // 待人工过验证的 wiki URL（撞 CF 时由 service 回填）
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -33,6 +34,8 @@ public class WikiExportWindow : Window, IDisposable
         };
         _plugin = plugin;
         _wiki = plugin.Wiki;
+        // 撞 Cloudflare 验证时：弹 WebView2 验证窗口，请司令官点一次；cookie 存进持久 profile 后自动复用
+        _wiki.OnCaptchaNeeded = url => _captchaUrl = url;
         _catChecked = new bool[WikiExportService.Categories.Count];
         for (var i = 0; i < _catChecked.Length; i++) _catChecked[i] = true;
     }
@@ -148,6 +151,16 @@ public class WikiExportWindow : Window, IDisposable
                 _cts?.Dispose();
                 _cts = null;
             }
+        }
+
+        // 撞 Cloudflare 验证：弹 WebView2 验证窗口，请司令官点一次；cookie 存进持久 profile 后下次自动复用
+        if (_captchaUrl != null)
+        {
+            var url = _captchaUrl;
+            _captchaUrl = null;
+            _plugin.Wiki.ShowCaptcha(url);
+            _result += (_result.Length > 0 ? "\n" : "")
+                       + "[提示] 检测到 Cloudflare 验证，已弹出验证窗口：请在窗口内完成验证，插件会自动继续提取。";
         }
     }
 

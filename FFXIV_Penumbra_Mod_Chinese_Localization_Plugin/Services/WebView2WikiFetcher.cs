@@ -13,26 +13,23 @@ namespace FFXIVPenumbraHanhua.Services;
 /// WebView2 版 wiki 抓取器：用**真实浏览器引擎**（而非 curl/.NET）发请求，
 /// 携带浏览器 TLS 指纹，从而绕开灰机 CDN 对非浏览器客户端的 Cloudflare 拦截。
 /// <para>
-/// 架构（保守优先，2026-10-11）：
-/// ① 跑在**独立 STA 线程 + 隐藏消息窗口 + 自有 Win32 消息泵**上，**完全不进入 Dalamud 主线程/ImGui 帧循环**——
-///    即使 WebView2 出问题也只波及本线程，不影响游戏渲染与插件帧循环；
-/// ② 抓取前先导航到 wiki 同源页，再在页内用 <c>fetch</c> 同源取数（规避 CORS）；
-/// ③ 全程 try/catch，任何失败都置 <see cref="IsAvailable"/>=false，由调用方回退到原 curl 路径——
-///    所以「WebView2 不可用」只会退回现状，不会让功能更差。
+/// 架构（2026-10-11 经游戏外独立复现程序实测校正，三条铁律）：
+/// ① <b>线程亲和</b>：<c>CoreWebView2Controller</c> 的 COM 接口绑定创建它的 OS 线程，
+///    跨线程访问抛 <c>E_NOINTERFACE</c>。故给该 STA 线程装 <b>专用 SynchronizationContext</b>，
+///    使所有 await 续体都回到本线程——否则必跨线程失败。
+/// ② <b>投递=排空</b>：自定义 SyncContext 的 Post 必须投到<b>消息泵真正会排空的那个队列</b>，
+///    且每次投递后必须 <b>PostMessage 唤醒</b>（消息泵阻塞在 GetMessage，不唤醒则永不消费）。
+///    —— 前一版就是踩了「投 A 队列、泵排 B 队列」导致 await 永久卡死。
+/// ③ <b>起手 about:blank</b>：直接 Navigate 到 wiki 页面会被 CF 拦（NavigationCompleted IsSuccess=False）；
+///    先停在 about:blank（必定成功），再用页内 fetch 取数。
 /// </para>
 /// <para>
-/// ⚠ 实机限制：WebView2 运行时行为无法在无游戏环境验证，需游戏内实测。
+/// 失败一律置 <see cref="IsAvailable"/>=false，由调用方回退 curl 路径——不会让功能更差。
 /// </para>
 /// </summary>
 internal sealed class WebView2WikiFetcher : IDisposable
 {
-    // ---- Win32 消息窗口与消息泵 ----
-    private const string WndClassName = "PMHWebView2Fetcher";
-    private const uint WM_APP = 0x8000;
-    private const uint WM_APP_PUMP = WM_APP + 1;
-    private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
-    private const int SW_HIDE = 0;
-    private const int IDC_ARROW = 32512;
+    private delegate IntPtr WndProcDelegate(IntPtr h, uint m, IntPtr w, IntPtr l);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct WNDCLASSEX
@@ -50,7 +47,13 @@ internal sealed class WebView2WikiFetcher : IDisposable
         [MarshalAs(UnmanagedType.LPWStr)] public string lpszClassName;
         public IntPtr hIconSm;
     }
-    private delegate IntPtr WndProcDelegate(IntPtr h, uint m, IntPtr w, IntPtr l);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG
+    {
+        public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam;
+        public uint time; public int px, py;
+    }
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern ushort RegisterClassEx(ref WNDCLASSEX c);
@@ -60,141 +63,189 @@ internal sealed class WebView2WikiFetcher : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr h);
     [DllImport("user32.dll")] private static extern IntPtr LoadCursor(IntPtr i, IntPtr c);
-    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetModuleHandle(string? n);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MSG
-    {
-        public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public System.Drawing.Point pt;
-    }
-    [DllImport("user32.dll")]
-    private static extern int GetMessage(out MSG m, IntPtr h, uint min, uint max);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string? n);
+    [DllImport("user32.dll")] private static extern int GetMessage(out MSG m, IntPtr h, uint a, uint b);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG m);
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG m);
 
-    // 供 SyncContext 投递的回调队列 + 泵唤醒
-    private static readonly ConcurrentQueue<Action> PumpQueue = new();
-    private static IntPtr _pumpWnd;
-    private static WndProcDelegate? _wndProcKeep;
+    private const string WndClassName = "PMHWebView2FetcherV2";
+    private const uint WM_APP = 0x8000;
+    private const uint WM_APP_PUMP = WM_APP + 1;
+    private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
+    private const int SW_SHOW = 5;
+    private const int IDC_ARROW = 32512;
 
-    // ---- WebView2 状态（仅在本类 STA 线程访问，跨线程经由 FetchAsync 的调度）----
+    /// <summary> 消息泵唯一队列：SyncContext 投递与消息泵排空必须用同一个（铁律②）。 </summary>
+    private static readonly ConcurrentQueue<Action> PumpQueue = new();
+
+    private static WndProcDelegate? _wndProcKeep;
+    private IntPtr _hwnd;
+
     private CoreWebView2Controller? _ctl;
-    private TaskCompletionSource<bool>? _readyTcs;
     private volatile bool _available;
     private volatile string? _lastError;
     private Thread? _thread;
-    private IntPtr _hwnd;
-    private bool _disposed;
-
+    private volatile bool _disposed;
     private readonly AppLog _log;
-
-    /// <summary> 传入日志以便把初始化/fetch 失败原因落盘（诊断必需，否则黑盒）。 </summary>
-    public WebView2WikiFetcher(AppLog log) => _log = log;
 
     public bool IsAvailable => _available;
     public string? LastError => _lastError;
 
-    /// <summary> wiki 同源页（先导航到它，后续 fetch 同源，避免 CORS）。 </summary>
-    private const string WikiOriginUrl = "https://cdn.huijiwiki.com/ff14/";
+    /// <summary>
+    /// 用户数据目录（WebView2 profile）。<b>必须是持久目录</b>：cf_clearance 等 cookie 存在 profile 里，
+    /// 用临时/每次新建的目录等于每次都是「零 cookie 全新浏览器」→ 被 CF 当 bot 拦（2026-10-11 实测）。
+    /// 持久化后，司令官手动过一次验证留下的 cookie 会一直复用，后续抓取自动带上。
+    /// </summary>
+    private readonly string _profileDir;
 
-    /// <summary> 启动抓取器（独立线程）；立即返回，不阻塞调用方。 </summary>
+    public WebView2WikiFetcher(AppLog log, string profileDir)
+    {
+        _log = log;
+        _profileDir = profileDir;
+    }
+
+    /// <summary> 抓取时发现是 Cloudflare 验证页、且当前没有可用 cookie 时触发，供 UI 弹窗请司令官手动过一次。 </summary>
+    public Action? OnCaptchaNeeded { get; set; }
+
+    /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。 </summary>
     public void Start()
     {
         if (_thread != null) return;
-        _thread = new Thread(ThreadMain)
-        {
-            IsBackground = true,
-            Name = "PMH-WebView2Fetcher",
-        };
+        _thread = new Thread(ThreadMain) { IsBackground = true, Name = "PMH-WebView2Fetcher" };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
     }
 
     /// <summary>
-    /// 用 WebView2 取一��� URL 的文本响应（JSON）。不可用/失败返回 null（调用方回退 curl）。
+    /// 用 WebView2 取一个 URL 的文本响应（JSON）。不可用/失败返回 null（调用方回退 curl）。
+    /// <para>
+    /// 关键：整个请求通过 <b>BlockingCollection</b> 同步「投递到 WebView2 线程 → 等结果」，
+    /// 保证 ExecuteScriptAsync 在该线程执行（铁律①）；但**投递的 async lambda 内部
+    /// 必须 await 后回到同线程**——靠专用 SyncContext（铁律②）。
+    /// </para>
     /// </summary>
-    public async Task<string?> FetchAsync(string url, CancellationToken ct)
+    public string? Fetch(string url, CancellationToken ct)
     {
-        if (_disposed || !_available) return null;
-        // 首次要等初始化 + 同源导航就绪
-        var ready = _readyTcs?.Task;
-        if (ready == null) return null;
-        try
-        {
-            using var reg = ct.Register(() => { });
-            var done = await ready.WaitAsync(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
-            if (!done) return null;
-        }
-        catch
-        {
-            return null;
-        }
+        if (_disposed || !_available || _ctl == null) return null;
 
-        // 把 fetch 调度到 WebView2 线程（必须在该线程访问 Controller）。
-        // 投递到 PumpQueue（消息泵真正排空的队列）并唤醒，否则永不被执行。
-        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var done = new ManualResetEventSlim(false);
+        string? result = null;
+        Exception? error = null;
+
+        // 投递到 WebView2 线程执行
         PumpQueue.Enqueue(async () =>
         {
             try
             {
-                var script = $"fetch({JsonSerializer.Serialize(url)}).then(r=>r.text())";
-                var raw = await _ctl!.CoreWebView2.ExecuteScriptAsync(script);
-                // ExecuteScriptAsync 返回 JSON 序列化的 JS 结果（一个字符串）→ 反序列化还原
+                var script = $"fetch({JsonSerializer.Serialize(url)}).then(r=>r.text()).catch(e=>'__WV2ERR__'+e)";
+                var raw = await _ctl!.CoreWebView2.ExecuteScriptAsync(script).ConfigureAwait(true);
                 var text = JsonSerializer.Deserialize<string>(raw);
-                if (text == null)
+                if (text != null && text.StartsWith("__WV2ERR__"))
                 {
-                    _log.Warn("[wv2] fetch 返回 null（页面可能未加载完成，无法执行脚本）");
-                    tcs.TrySetResult(null);
+                    error = new InvalidOperationException(text.Substring("__WV2ERR__".Length));
                 }
                 else
                 {
-                    _log.Info($"[wv2] fetch 成功，返回 {text.Length} 字符{(CloudflareChallengeDetector.IsChallenge(text) ? "（⚠ 是 Cloudflare 挑战页）" : "")}");
-                    tcs.TrySetResult(text);
+                    result = text;
+                    if (text != null && CloudflareChallengeDetector.IsChallenge(text))
+                    {
+                        // 仍是挑战页 → 说明本 profile 还没有通过验证的 cookie。
+                        // 触发人工验证：请司令官在一个可见的 WebView2 窗口里点一次 CF 验证，
+                        // cookie 会存进持久 profile，之后自动抓取即可复用。
+                        _log.Warn("[wv2] 返回 Cloudflare 挑战页——需要司令官手动过一次验证（将弹出验证窗口）");
+                        try { OnCaptchaNeeded?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
+                    }
+                    else
+                    {
+                        _log.Info($"[wv2] fetch 成功，返回 {text?.Length ?? 0} 字符");
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _lastError = ex.Message;
-                _log.Error($"[wv2] fetch 失败：{ex.GetType().Name} {ex.Message}");
-                tcs.TrySetResult(null);
+                error = ex;
+                _log.Error($"[wv2] fetch 失败：{ex.GetType().Name} {Truncate(ex.Message, 120)}");
+            }
+            finally
+            {
+                done.Set();
             }
         });
-        WakePump(); // 必须唤醒：消息泵正阻塞在 GetMessage，否则上方的 fetch 永不被执行
-        try
+        WakePump(); // 铁律②：不唤醒则消息泵阻塞在 GetMessage，队列永不被消费
+
+        // 在本线程等结果（最多 30s），不占用 WebView2 线程
+        if (!done.Wait(TimeSpan.FromSeconds(30), ct))
         {
-            return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
-        }
-        catch
-        {
+            _log.Warn("[wv2] fetch 等待超时（30s）");
             return null;
         }
+        if (error != null) return null;
+        return result;
     }
 
-    /// <summary> 专用线程主体：设置同步上下文 → 启动 WebView2 初始化 → 跑消息泵。 </summary>
+    /// <summary>
+    /// 在 fetcher 的 WebView2 线程显示窗口并导航到 wiki 页，请司令官手动过一次 Cloudflare 验证。
+    /// 验证通过后 cf_clearance cookie 存入<b>持久 profile</b>，之后自动抓取会复用，不再需要验证。
+    /// 立即返回（异步导航）；日志会记录验证结果。
+    /// </summary>
+    public void ShowCaptchaWindow(string url)
+    {
+        if (_disposed || _ctl == null) return;
+        PumpQueue.Enqueue(() =>
+        {
+            try
+            {
+                _log.Info("[wv2] 显示验证窗口，请司令官在窗口内完成 Cloudflare 验证…");
+                ShowWindow(_hwnd, SW_SHOW);
+                _ctl!.CoreWebView2.Navigate(url);
+                // 监听：一旦导航到非挑战内容，视为验证通过
+                _ctl.CoreWebView2.NavigationCompleted += OnCaptchaNavCompleted;
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"[wv2] 显示验证窗口失败：{ex.GetType().Name} {Truncate(ex.Message, 120)}");
+            }
+        });
+        WakePump();
+    }
+
+    private void OnCaptchaNavCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        try
+        {
+            if (e.IsSuccess)
+            {
+                _log.Info("[wv2] 验证页导航完成——若页面已是 wiki 内容则验证通过（cookie 已存入 profile）");
+            }
+        }
+        catch { /* 忽略 */ }
+    }
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
+
+    /// <summary> 专用线程主体：装专用 SyncContext → 起手窗口 → 启动 WebView2 初始化 → 跑消息泵。 </summary>
     private void ThreadMain()
     {
         try
         {
+            // 铁律①：先装专用 context，让本线程上所有 await 续体都回到本线程（不跨线程碰 COM）
             SynchronizationContext.SetSynchronizationContext(new PumpSyncContext(this));
             EnsureWindow();
-            _readyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            // 初始化（async；其 await 会经 PumpSyncContext 回到本线程继续）
             _ = InitWebView2Async();
-            MessagePump();
+            Pump();
         }
         catch (Exception ex)
         {
             _lastError = ex.Message;
             _available = false;
+            _log.Error($"[wv2] 抓取线程异常：{ex.GetType().Name} {Truncate(ex.Message, 150)}");
         }
     }
 
     private void EnsureWindow()
     {
-        if (_pumpWnd != IntPtr.Zero) { _hwnd = _pumpWnd; return; }
         var hInst = GetModuleHandle(null);
         _wndProcKeep = WndProc;
         var wc = new WNDCLASSEX
@@ -205,101 +256,85 @@ internal sealed class WebView2WikiFetcher : IDisposable
             hCursor = LoadCursor(IntPtr.Zero, (IntPtr)IDC_ARROW),
             lpszClassName = WndClassName,
         };
-        // 类名可能已被本进程注册（热重载残留）→ RegisterClassEx 返回 0 不致命，继续建窗口
-        RegisterClassEx(ref wc);
-        _pumpWnd = CreateWindowEx(0, WndClassName, "wv2", WS_OVERLAPPEDWINDOW,
+        RegisterClassEx(ref wc); // 可能已注册（热重载残留），返回 0 不致命
+        _hwnd = CreateWindowEx(0, WndClassName, "wv2", WS_OVERLAPPEDWINDOW,
             0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero);
-        ShowWindow(_pumpWnd, SW_HIDE);
-        _hwnd = _pumpWnd;
     }
 
-    private static IntPtr WndProc(IntPtr h, uint m, IntPtr w, IntPtr l)
+    private IntPtr WndProc(IntPtr h, uint m, IntPtr w, IntPtr l)
     {
         if (m == WM_APP_PUMP)
         {
             while (PumpQueue.TryDequeue(out var a))
             {
-                try { a(); } catch { /* 忽略单条异常 */ }
+                try { a(); } catch (Exception ex) { _log.Error($"[wv2] 队列任务异常：{ex.GetType().Name}"); }
             }
         }
         return DefWindowProc(h, m, w, l);
     }
 
-    private void MessagePump()
+    private void Pump()
     {
-        while (!_disposed && GetMessage(out var m, IntPtr.Zero, 0, 0) > 0)
+        var deadline = DateTime.UtcNow.AddSeconds(300);
+        while (!_disposed && DateTime.UtcNow < deadline)
         {
+            if (GetMessage(out var m, IntPtr.Zero, 0, 0) <= 0) break;
             TranslateMessage(ref m);
             DispatchMessage(ref m);
         }
     }
 
-    /// <summary> 在 WebView2 线程上完成初始化：建 controller → 导航同源页 → 就绪。 </summary>
+    /// <summary> 在 WebView2 线程完成初始化：环境 → 控制器 → 停在 about:blank（铁律③）。 </summary>
     private async Task InitWebView2Async()
     {
         try
         {
-            var dataFolder = Path.Combine(Path.GetTempPath(), "pmh_wiki_webview");
-            Directory.CreateDirectory(dataFolder);
-            // 显式指定 runtime 可执行目录：游戏进程里会命中系统旧版 native loader（1.0.864.35）的自动探测逻辑，
-            // 误判「找不到 runtime」；显式给目录可绕过该探测（本机控制台测试同一 SDK 自动探测是成功的）。
-            var exeFolder = WebView2RuntimeProbe.TryGetRuntimeExecutableFolder();
+            // 持久 profile 目录（插件配置目录内，随插件存续）
+            Directory.CreateDirectory(_profileDir);
+            _log.Info("[wv2] 使用持久 profile：" + _profileDir);
+
+            var options = WebView2RuntimeProbe.TryGetRuntimeExecutableFolder();
             _log.Info("[wv2] 正在创建 WebView2 环境…"
-                      + (exeFolder != null ? "（显式指定 runtime 目录：" + exeFolder + "）" : "（自动探测 runtime）"));
+                      + (options != null ? "（显式指定 runtime：" + options + "）" : "（自动探测 runtime）"));
+
             CoreWebView2Environment env;
-            if (exeFolder != null)
-                env = await CoreWebView2Environment.CreateAsync(exeFolder, dataFolder);
-            else
-                env = await CoreWebView2Environment.CreateAsync(dataFolder);
+            if (options != null) env = await CoreWebView2Environment.CreateAsync(options, _profileDir);
+            else env = await CoreWebView2Environment.CreateAsync(_profileDir);
+
             _ctl = await env.CreateCoreWebView2ControllerAsync(_hwnd);
-            _log.Info("[wv2] 控制器已绑定，导航同源页…");
-            var nav = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _ctl.CoreWebView2.NavigationCompleted += (_, a) =>
-            {
-                if (a.IsSuccess) nav.TrySetResult(true);
-                else nav.TrySetResult(false);
-            };
-            _ctl.CoreWebView2.Navigate(WikiOriginUrl);
-            // 超时兜底：同源页可能因 CF 挑战/网络一直不触发 NavigationCompleted，
-            // 不能无限等——超时后标记可用，让 fetch 自行尝试（同源与否由 fetch 结果说话）。
-            var ok = await nav.Task.WaitAsync(TimeSpan.FromSeconds(20));
-            if (!ok)
-            {
-                _lastError = "WebView2 导航同源页未完成（超时）";
-                _log.Warn("[wv2] 导航同源页未完成（20s 超时），仍尝试直接 fetch");
-            }
-            else
-            {
-                _log.Info("[wv2] 同源页导航完成");
-            }
+            _log.Info("[wv2] 控制器已绑定，停在 about:blank…");
+
+            var blank = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ctl.CoreWebView2.NavigationCompleted += (_, a) => blank.TrySetResult(a.IsSuccess);
+            _ctl.CoreWebView2.Navigate("about:blank");
+            try { await blank.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch { _log.Warn("[wv2] about:blank 就绪等待超时（仍尝试 fetch）"); }
+
             _available = true;
             _log.Info("[wv2] WebView2 直抓已就绪（真实浏览器指纹，CDN 应放行）");
-            _readyTcs?.TrySetResult(true);
         }
         catch (Exception ex)
         {
             _lastError = ex.Message;
             _available = false;
-            _log.Error($"[wv2] WebView2 初始化失败：{ex.GetType().Name} {ex.Message}");
-            _readyTcs?.TrySetResult(false);
+            _log.Error($"[wv2] WebView2 初始化失败：{ex.GetType().Name} {Truncate(ex.Message, 150)}");
         }
     }
 
-    /// <summary> 唤醒消息泵取队列（须在 WebView2 线程外的调用点使用）。 </summary>
     private void WakePump()
     {
-        var h = _pumpWnd;
+        var h = _hwnd;
         if (h != IntPtr.Zero) PostMessage(h, WM_APP_PUMP, IntPtr.Zero, IntPtr.Zero);
     }
 
     public void Dispose()
     {
         _disposed = true;
-        try { if (_pumpWnd != IntPtr.Zero) { DestroyWindow(_pumpWnd); _pumpWnd = IntPtr.Zero; } } catch { }
+        try { if (_hwnd != IntPtr.Zero) { DestroyWindow(_hwnd); _hwnd = IntPtr.Zero; } } catch { /* 忽略 */ }
         _available = false;
     }
 
-    /// <summary> 把 async 延续投递回 WebView2 线程的消息泵。 </summary>
+    /// <summary> 把 await 续体投递回 WebView2 线程（铁律②：投 PumpQueue + 唤醒消息泵）。 </summary>
     private sealed class PumpSyncContext : SynchronizationContext
     {
         private readonly WebView2WikiFetcher _owner;
@@ -307,16 +342,13 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
         public override void Post(SendOrPostCallback d, object? state)
         {
-            // async 续体必须投到「消息泵真正会排空的那个队列」（PumpQueue），
-            // 否则续体无人消费 → await 永久卡死（2026-10-11 实测踩过）。
             PumpQueue.Enqueue(() => d(state));
             _owner.WakePump();
         }
 
         public override void Send(SendOrPostCallback d, object? state)
         {
-            // 同线程调用直接执行
-            if (Current == this) { d(state); return; }
+            if (ReferenceEquals(Current, this)) { d(state); return; }
             Post(d, state);
         }
 
