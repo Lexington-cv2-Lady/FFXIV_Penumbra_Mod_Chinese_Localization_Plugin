@@ -82,6 +82,12 @@ internal sealed class WebView2WikiFetcher : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG m);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT rc);
 
     private const uint WM_APP = 0x8000;
@@ -93,6 +99,17 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private const int SW_SHOW = 5;
     private const int SW_HIDE = 0;
     private const int IDC_ARROW = 32512;
+    private const uint MONITOR_DEFAULTTOPRIMARY = 1;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_SHOWWINDOW = 0x0040;
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+
+    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct MONITORINFO
+    {
+        public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags;
+    }
 
     /// <summary> 验证窗口尺寸。窗口按此尺寸创建但默认隐藏（WS_OVERLAPPEDWINDOW 无 WS_VISIBLE）；
     /// WebView2 内容大小随宿主窗口而定，故验证时只需 MoveWindow + ShowWindow，无需重设控制器 Bounds。 </summary>
@@ -382,11 +399,18 @@ internal sealed class WebView2WikiFetcher : IDisposable
             try
             {
                 _log.Info("[wv2] 显示验证窗口，请司令官在窗口内完成 Cloudflare 验证…");
-                // 窗口按验证尺寸创建但默认隐藏：居中放大并显示
-                var x = Math.Max(0, (GetSystemMetrics(0) - CaptchaWidth) / 2);
-                var y = Math.Max(0, (GetSystemMetrics(1) - CaptchaHeight) / 2);
-                MoveWindow(_hwnd, x, y, CaptchaWidth, CaptchaHeight, true);
+                // 弹到「鼠标所在显示器」的工作区中央：多屏用户（游戏全屏主屏时，按主屏尺寸
+                // 算的居中会落到副屏）压根看不见它——2026-10-13 17:04 实录「弹出来不明显」。
+                var (mx, my) = CenterOnMouseMonitor(CaptchaWidth, CaptchaHeight);
+                MoveWindow(_hwnd, mx, my, CaptchaWidth, CaptchaHeight, true);
                 ShowWindow(_hwnd, SW_SHOW);
+                // FFXIV 是无边框全屏：普通 ShowWindow 不会把窗口带到前台，用户既看不见也点不着
+                // （turnstile 交互要求窗口可接收输入）——三连：置前 + 临时置顶 + 抢焦点。
+                // SetForegroundWindow 在本进程（ffxiv）内调用不受系统前台锁限制；
+                // 置顶随窗口隐藏（WM_CLOSE → SW_HIDE）自然失效，不常驻挡游戏画面。
+                BringWindowToTop(_hwnd);
+                SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                SetForegroundWindow(_hwnd);
                 // WebView2 控制器是在「隐藏」宿主窗口上初始化的，不会自动合成画面；
                 // 显示后必须按宿主客户区**显式重设 Bounds** 才会渲染
                 // （2026-10-13 实测：只 MoveWindow+ShowWindow 会是整片空白，页面加载了但不合成）。
@@ -402,6 +426,31 @@ internal sealed class WebView2WikiFetcher : IDisposable
             }
         });
         WakePump();
+    }
+
+    /// <summary>
+    /// 在指定工作区内居中放置窗口的左上角坐标（纯函数，可单测）。
+    /// 坐标为负是合法的——副屏在主屏左侧时工作区左缘为负（如 -1920）。
+    /// 窗口比工作区大时贴工作区左上角（Max(0,…)），绝不弹到屏幕外。
+    /// </summary>
+    internal static (int X, int Y) CenterInWorkArea(int workLeft, int workTop, int workRight, int workBottom, int w, int h)
+    {
+        var x = workLeft + Math.Max(0, (workRight - workLeft - w) / 2);
+        var y = workTop + Math.Max(0, (workBottom - workTop - h) / 2);
+        return (x, y);
+    }
+
+    /// <summary> 取鼠标所在显示器的工作区（排除任务栏），返回验证窗口的居中左上角；取显示器失败时回退主屏。 </summary>
+    private static (int X, int Y) CenterOnMouseMonitor(int w, int h)
+    {
+        if (GetCursorPos(out var pt))
+        {
+            var mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi))
+                return CenterInWorkArea(mi.rcWork.Left, mi.rcWork.Top, mi.rcWork.Right, mi.rcWork.Bottom, w, h);
+        }
+        return CenterInWorkArea(0, 0, GetSystemMetrics(0), GetSystemMetrics(1), w, h);
     }
 
     /// <summary> 把 WebView2 显示区域同步为宿主窗口客户区（隐藏窗口上初始化的控制器不会自动合成画面，必须显式重设）。 </summary>

@@ -274,4 +274,42 @@ public class WebView2FetchUnavailableTests
         f.ResetForRestart();
         Assert.NotEqual(a, f.WindowClassName);
     }
+
+    // ============ 验证窗口多屏居中（2026-10-13 17:04 实录「弹出来不明显」） ============
+
+    [Fact]
+    public void CenterInWorkArea_主屏工作区_窗口居中()
+    {
+        // 1920x1080 屏幕、任务栏占 40 → 工作区 0,0,1920,1040；放 1100x800
+        var (x, y) = WebView2WikiFetcher.CenterInWorkArea(0, 0, 1920, 1040, 1100, 800);
+        Assert.Equal(410, x); // (1920-1100)/2
+        Assert.Equal(120, y); // (1040-800)/2
+    }
+
+    [Fact]
+    public void CenterInWorkArea_副屏在右_按副屏工作区居中()
+    {
+        // 双屏横排：副屏工作区 1920..3840。旧代码按主屏尺寸算，窗口落到副屏用户看不见（实录）
+        var (x, y) = WebView2WikiFetcher.CenterInWorkArea(1920, 0, 3840, 1040, 1100, 800);
+        Assert.Equal(2330, x); // 1920+(1920-1100)/2
+        Assert.Equal(120, y);
+    }
+
+    [Fact]
+    public void CenterInWorkArea_副屏在左_坐标为负也合法()
+    {
+        // 副屏在主屏左侧：工作区 -1920..0，窗口中心 -410 处，x 为负——负坐标合法，不能贴 0
+        var (x, _) = WebView2WikiFetcher.CenterInWorkArea(-1920, 0, 0, 1040, 1100, 800);
+        Assert.Equal(-1510, x); // -1920+(1920-1100)/2
+    }
+
+    [Fact]
+    public void CenterInWorkArea_窗口比工作区大_贴左上角不外溢()
+    {
+        // 反例：小工作区（800x600）放大窗口（1100x800）——必须贴工作区左上角，
+        // 不能算出负中心把窗口弹到屏幕外
+        var (x, y) = WebView2WikiFetcher.CenterInWorkArea(0, 0, 800, 600, 1100, 800);
+        Assert.Equal(0, x);
+        Assert.Equal(0, y);
+    }
 }
