@@ -81,9 +81,18 @@ public sealed class WikiExportService : IDisposable
 
     public string LastResult { get; private set; } = "";
 
-    public WikiExportService(AppLog log, bool enableWebView2 = false, string? wv2ProfileDir = null)
+    /// <summary>
+    /// 插件 DLL 所在目录（由 <see cref="Plugin"/> 从 Dalamud 的 <c>PluginInterface.AssemblyLocation</c> 传入）。
+    /// 定位随插件发布的 <c>wv2_fetch_helper.exe</c> **必须靠它**：Dalamud 常以字节流加载插件，
+    /// 此时 <c>Assembly.Location</c> 为空字符串，而 <c>AppContext.BaseDirectory</c> 指向游戏目录——
+    /// 两个候选都找不到 exe（2026-10-14 05:35 实测「未找到外部抓取器」正是这么来的）。
+    /// </summary>
+    private static string? s_pluginDir;
+
+    public WikiExportService(AppLog log, bool enableWebView2 = false, string? wv2ProfileDir = null, string? pluginDir = null)
     {
         _log = log;
+        if (!string.IsNullOrEmpty(pluginDir)) s_pluginDir = pluginDir;
         _http = new HttpClient();
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentValue);
         _http.Timeout = TimeSpan.FromSeconds(30);
@@ -195,6 +204,7 @@ public sealed class WikiExportService : IDisposable
             }
             catch { /* 忽略 */ }
             try { cands.Add(AppContext.BaseDirectory); } catch { /* 忽略 */ }
+            if (!string.IsNullOrEmpty(s_pluginDir)) cands.Add(s_pluginDir); // Dalamud 给的真实插件目录（最可靠）
             foreach (var d in cands)
             {
                 try
