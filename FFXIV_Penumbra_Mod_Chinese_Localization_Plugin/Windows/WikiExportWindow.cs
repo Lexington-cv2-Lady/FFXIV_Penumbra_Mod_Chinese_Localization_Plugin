@@ -22,6 +22,8 @@ public class WikiExportWindow : Window, IDisposable
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
     private string? _captchaUrl;   // 待人工过验证的 wiki URL（撞 CF 时由 service 回填）
+    private bool _captchaWindowClosed;   // 验证窗口已被用户关闭（fetcher 线程置位）
+    private bool _awaitingCaptchaResume; // 上一轮因等待人工验证而暂停（-4），关窗后应自动续跑
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -36,6 +38,8 @@ public class WikiExportWindow : Window, IDisposable
         _wiki = plugin.Wiki;
         // 撞 Cloudflare 验证时：弹 WebView2 验证窗口，请司令官点一次；cookie 存进持久 profile 后自动复用
         _wiki.OnCaptchaNeeded = url => _captchaUrl = url;
+        // 验证窗口被关闭：标记置位，Draw 里据此从断点自动续跑
+        _wiki.OnCaptchaWindowClosed = () => _captchaWindowClosed = true;
         _catChecked = new bool[WikiExportService.Categories.Count];
         for (var i = 0; i < _catChecked.Length; i++) _catChecked[i] = true;
     }
@@ -144,6 +148,13 @@ public class WikiExportWindow : Window, IDisposable
                 var n = _task.Result;
                 if (n != 0) _plugin.ReloadDictionary();
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
+                if (n == -4)
+                {
+                    // 需要人工验证：标记待续跑；提示用户在验证窗口完成验证后关窗即自动继续
+                    _awaitingCaptchaResume = true;
+                    _result += (_result.Length > 0 ? "\n" : "")
+                               + "[提示] 已弹出验证窗口：请在窗口内完成 Cloudflare 验证，然后关闭验证窗口，插件会自动从断点继续提取。";
+                }
             }
             finally
             {
@@ -162,6 +173,14 @@ public class WikiExportWindow : Window, IDisposable
             _result += (_result.Length > 0 ? "\n" : "")
                        + "[提示] 检测到 Cloudflare 验证，已弹出验证窗口：请在窗口内完成验证，插件会自动继续提取。";
         }
+
+        // 验证窗口关闭 → 自动从断点续跑（仅当上一轮是因等待人工验证而暂停的 -4）
+        if (_awaitingCaptchaResume && _captchaWindowClosed && (_task == null || _task.IsCompleted))
+        {
+            _awaitingCaptchaResume = false;
+            _captchaWindowClosed = false;
+            StartExtract(dictDir, "[提示] 验证窗口已关闭，从断点继续提取…");
+        }
     }
 
     private static void OpenUrl(string url)
@@ -176,9 +195,13 @@ public class WikiExportWindow : Window, IDisposable
         }
     }
 
-    /// <summary> 按当前勾选启动提取。 </summary>
-    private void StartExtract(string dictDir)
+    /// <summary> 按当前勾选启动提取。<paramref name="resumeNote"/> 非空时作为结果区首行（验证后自动续跑用）。 </summary>
+    private void StartExtract(string dictDir, string? resumeNote = null)
     {
+        // 新的一轮（含验证后自动续跑）：清掉上一轮的验证等待状态
+        _awaitingCaptchaResume = false;
+        _captchaWindowClosed = false;
+
         var prefixes = new List<string>();
         if (_perCat)
         {
@@ -195,7 +218,7 @@ public class WikiExportWindow : Window, IDisposable
             prefixes.AddRange(new[] { "Item/", "Action/", "Quest/", "Achievement/", "Emote/" });
         }
 
-        _result = "";
+        _result = resumeNote ?? "";
         _cts = new CancellationTokenSource();
         _task = Task.Run(async () =>
         {

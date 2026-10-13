@@ -82,6 +82,7 @@ public sealed class WikiExportService
         {
             _wv2 = new WebView2WikiFetcher(_log, wv2ProfileDir!);
             _wv2.Start(); // 独立线程异步初始化；未就绪/失败自动回退 curl 路径
+            _wv2.OnCaptchaWindowClosed = () => OnCaptchaWindowClosed?.Invoke();
         }
     }
 
@@ -95,33 +96,69 @@ public sealed class WikiExportService
     /// ② 失败退避：网络失败按 10s/30s 退避重试，重试耗尽才放弃。
     /// 命中 Cloudflare 挑战页时**不重试**（反复试只会延长封禁），交由调用方全局中止。
     /// </summary>
-    /// <returns>(正文, 是否被风控拦截)。被拦时正文为 null 且第二项为 true。</returns>
-    private async Task<(string? Body, bool Blocked)> FetchAsync(string url, CancellationToken ct)
+    /// <returns>(正文, 是否被风控拦截, 是否需人工完成 Cloudflare 验证)。被拦时正文为 null 且第二项为 true；
+    /// 需验证时第三项为 true——调用方应中止本轮（不打 curl，避免延长 IP 冷却），待验证后从断点续跑。</returns>
+    private async Task<(string? Body, bool Blocked, bool NeedCaptcha)> FetchAsync(string url, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
-            if (ct.IsCancellationRequested) return (null, false);
-            if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false);
+            if (ct.IsCancellationRequested) return (null, false, false);
+            if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false, false);
 
-        // 取数优先级：WebView2（真实浏览器指纹，CDN 放行）→ curl → HttpClient。
-        // WebView2 未就绪/失败即回退，故「WebView2 不可用」只会退回现状，不会让功能更差。
-        var body = await FetchViaWebView2(url, ct).ConfigureAwait(false)
-                   ?? await TryCurlAsync(url, ct).ConfigureAwait(false)
-                   ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
+            // 取数优先级：WebView2（真实浏览器指纹）→ curl → HttpClient。
+            // WebView2 未就绪/失败即回退 curl，故「WebView2 不可用」只会退回现状，不会让功能更差；
+            // 但 WebView2 明确「需要同源上下文/人工验证」时**不打 curl**——脚本客户端只会被 CF 拦，
+            // 反复试还会延长出口 IP 冷却，此时应中止等验证后续跑（NeedCaptcha）。
+            var body = await FetchViaWebView2(url, ct).ConfigureAwait(false);
+            switch (DecideAfterWebView2(body, _wv2?.CaptchaPending == true))
+            {
+                case Wv2Decision.NeedCaptcha:
+                    return (null, false, true);
+                case Wv2Decision.Accept:
+                    // 兜底：万一带回挑战页（理论上 Decide 已拦），仍按被拦处理
+                    if (CloudflareChallengeDetector.IsChallenge(body)) return (null, true, false);
+                    return (body, false, false);
+                default:
+                    body = await TryCurlAsync(url, ct).ConfigureAwait(false)
+                           ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
+                    break;
+            }
 
-        if (body != null)
-        {
-            // 拿到内容但是 Cloudflare 挑战页：确认被风控，立刻上报，不再重试
-            if (CloudflareChallengeDetector.IsChallenge(body))
-                return (null, true);
-            return (body, false);
-        }
+            if (body != null)
+            {
+                // 拿到内容但是 Cloudflare 挑战页：确认被风控，立刻上报，不再重试
+                if (CloudflareChallengeDetector.IsChallenge(body))
+                    return (null, true, false);
+                return (body, false, false);
+            }
 
-            if (ct.IsCancellationRequested) return (null, false);
-            if (attempt >= MaxRetries) return (null, false);
+            if (ct.IsCancellationRequested) return (null, false, false);
+            if (attempt >= MaxRetries) return (null, false, false);
             if (!await DelayAsync(attempt == 0 ? RetryDelayFirstMs : RetryDelayNextMs, ct).ConfigureAwait(false))
-                return (null, false);
+                return (null, false, false);
         }
+    }
+
+    /// <summary> WebView2 取数后的分流决策（纯函数，可单测；反例锁「未启用/未就绪必须回退 curl」）。 </summary>
+    internal enum Wv2Decision
+    {
+        /// <summary> 采用 WebView2 取到的正文。 </summary>
+        Accept,
+        /// <summary> WebView2 没取到且未报等待验证：按旧行为回退 curl/HttpClient 保底。 </summary>
+        FallbackCurl,
+        /// <summary> 需要人工完成 Cloudflare 验证（跨源失败或挑战页）：中止本轮，关窗后从断点续跑。 </summary>
+        NeedCaptcha,
+    }
+
+    /// <summary>
+    /// WebView2 取到 <paramref name="body"/> 后怎么走。
+    /// </summary>
+    internal static Wv2Decision DecideAfterWebView2(string? body, bool captchaPending)
+    {
+        if (body != null)
+            return CloudflareChallengeDetector.IsChallenge(body) ? Wv2Decision.NeedCaptcha : Wv2Decision.Accept;
+        // 没取到正文：抓取器报「等待验证」→ 等验证续跑；否则（未启用/未就绪/真失败）→ 回退 curl 保底
+        return captchaPending ? Wv2Decision.NeedCaptcha : Wv2Decision.FallbackCurl;
     }
 
     /// <summary> 可取消等待；被取消返回 false（不抛异常，交由调用方按 ct 判定）。 </summary>
@@ -154,6 +191,9 @@ public sealed class WikiExportService
                 };
         }
     }
+
+    /// <summary> WebView2 验证窗口被用户关闭时触发（UI 据此从断点自动续跑提取）。 </summary>
+    public Action? OnCaptchaWindowClosed { get; set; }
 
     /// <summary> 本轮正在请求的 URL（供挑战事件回传给 UI）。 </summary>
     private string? CurrentUrl { get; set; }
@@ -275,8 +315,9 @@ public sealed class WikiExportService
     /// 执行提取。perCat=true 按勾选分类各写一个 json；false 合并写入 汇总.json。
     /// log 用于逐条日志回传；ct 可取消（已抓取部分仍保存）。
     /// 请求带节流（<see cref="RequestIntervalMs"/>）与失败退避；命中 Cloudflare 挑战页立即全局中止（-3），
+    /// 需人工完成验证时中止并等关窗后续跑（-4），
     /// 并保留续抓进度（<see cref="ProgressValidHours"/> 小时内下次运行从断点续抓）。
-    /// 返回：新增术语条数；-1=参数/异常，-2=已取消，-3=被风控拦截中止。
+    /// 返回：新增术语条数；-1=参数/异常，-2=已取消，-3=被风控拦截中止，-4=需人工完成 Cloudflare 验证（已弹窗，关窗后续跑）。
     /// </summary>
     public async Task<int> ExportAsync(IReadOnlyList<string> prefixes, bool perCat, string dictionaryDir,
         Action<string>? log = null, CancellationToken ct = default)
@@ -318,6 +359,7 @@ public sealed class WikiExportService
 
         var cancelled = false;     // 取消时跳出抓取循环，已抓取部分仍在下方写回保存
         var blockedGlobal = false; // 命中 Cloudflare 风控时全局中止，已抓取部分同样写回保存
+        var captchaNeeded = false; // WebView2 需人工过验证：弹窗已由 UI 触发，保存断点中止，关窗后续跑
 
         try
         {
@@ -353,7 +395,15 @@ public sealed class WikiExportService
                     if (gapCont.Length > 0) url += "&gapcontinue=" + Uri.EscapeDataString(gapCont);
                     if (rvCont.Length > 0) url += "&rvcontinue=" + Uri.EscapeDataString(rvCont);
 
-                    var (resp, blocked) = await FetchAsync(url, ct).ConfigureAwait(false);
+                    var (resp, blocked, needCaptcha) = await FetchAsync(url, ct).ConfigureAwait(false);
+                    if (needCaptcha)
+                    {
+                        // WebView2 需要人工过 Cloudflare 验证（验证窗口已由 UI 弹出）：
+                        // 保存断点中止本轮，**不打 curl**（脚本客户端只会被拦、还延长 IP 冷却）；
+                        // 用户关闭验证窗口后 UI 自动从断点续跑，届时 WebView2 已停在 wiki 同源页。
+                        captchaNeeded = true;
+                        break;
+                    }
                     if (blocked)
                     {
                         // 命中 Cloudflare 挑战页：立即全局中止，后续分类不再尝试（继续打只会延长 IP 冷却）
@@ -456,6 +506,12 @@ public sealed class WikiExportService
                                 "已抓取部分仍会保存；请间隔数十分钟或切换网络/代理后重试，切勿连续重试。");
                     break;
                 }
+                if (captchaNeeded)
+                {
+                    log?.Invoke($"[提示] {disp} 需要人工完成 Cloudflare 验证（验证窗口已弹出）：请在窗口内完成验证，" +
+                                "然后关闭验证窗口，插件将自动从断点继续抓取。");
+                    break;
+                }
             }
 
             // 未被取消、未被拦截：全部分类均已抓完，清掉续抓进度（下次为完整抓取，可拾取新增页）
@@ -544,6 +600,12 @@ public sealed class WikiExportService
                 LastResult = "Wiki 提取已取消（已抓取部分已保存）";
                 _log.Info(LastResult);
                 return -2;
+            }
+            if (captchaNeeded)
+            {
+                LastResult = "Wiki 提取需要人工完成 Cloudflare 验证（已抓取部分已保存）：请在验证窗口内完成验证并关闭窗口，插件将自动从断点继续。";
+                _log.Info(LastResult);
+                return -4;
             }
             if (blockedGlobal)
             {
