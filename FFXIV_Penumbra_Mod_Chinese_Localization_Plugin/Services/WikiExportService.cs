@@ -175,17 +175,36 @@ public sealed class WikiExportService : IDisposable
         }
     }
 
-    /// <summary> 外部抓取器 exe 的随插件路径；未随插件发布时为 null（静默回退，不影响既有链路）。 </summary>
+    private static bool _helperLogged;
+
+    /// <summary>
+    /// 外部抓取器 exe 的随插件路径；未随插件发布时为 null（静默回退，不影响既有链路）。
+    /// 2026-10-14 教训：只认 `Assembly.Location` 一个目录不够——Dalamud 的装配位置未必等于
+    /// 部署目录，首版因此「exe 明明在 devPlugins、却从没被调用过」，且因无日志而查不出来。
+    /// 故改为多候选依次探测。
+    /// </summary>
     internal static string? ExternalHelperPath
     {
         get
         {
+            var cands = new List<string>();
             try
             {
-                var dir = Path.GetDirectoryName(typeof(WikiExportService).Assembly.Location);
-                return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "wv2_fetch_helper.exe");
+                var d1 = Path.GetDirectoryName(typeof(WikiExportService).Assembly.Location);
+                if (!string.IsNullOrEmpty(d1)) cands.Add(d1);
             }
-            catch { return null; }
+            catch { /* 忽略 */ }
+            try { cands.Add(AppContext.BaseDirectory); } catch { /* 忽略 */ }
+            foreach (var d in cands)
+            {
+                try
+                {
+                    var p = Path.Combine(d, "wv2_fetch_helper.exe");
+                    if (File.Exists(p)) return p;
+                }
+                catch { /* 忽略 */ }
+            }
+            return null;
         }
     }
 
@@ -200,7 +219,21 @@ public sealed class WikiExportService : IDisposable
     private async Task<string?> FetchViaExternalHelperAsync(string url, CancellationToken ct)
     {
         var exe = ExternalHelperPath;
-        if (exe == null || !File.Exists(exe)) return null; // 未随插件发布：静默走老路
+        if (exe == null)
+        {
+            // 首版在这里是「静默 return null」，结果 exe 明明在 devPlugins 却从没被调用、日志也查不出——必须留痕。
+            if (!_helperLogged)
+            {
+                _helperLogged = true;
+                _log.Warn("[wv2] 未找到外部抓取器 wv2_fetch_helper.exe（未随插件发布）——抓取仍走内嵌 WebView2/curl 老路");
+            }
+            return null;
+        }
+        if (!_helperLogged)
+        {
+            _helperLogged = true;
+            _log.Info("[wv2] 外部抓取器（游戏外独立进程）已启用：" + exe);
+        }
 
         var outFile = Path.Combine(Path.GetTempPath(), "wv2out_" + Guid.NewGuid().ToString("N") + ".txt");
         try
@@ -217,12 +250,28 @@ public sealed class WikiExportService : IDisposable
             using var p = Process.Start(psi);
             if (p == null) return null;
 
+            // 必须**异步读走** stdout/stderr：重定向后不读，缓冲区满会把子进程活活憋死（经典陷阱）。
+            var readOut = p.StandardOutput.ReadToEndAsync();
+            var readErr = p.StandardError.ReadToEndAsync();
+
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             linked.CancelAfter(TimeSpan.FromSeconds(120)); // 单次上限：启动开销 + 导航 45s + 解析 5s
             try { await p.WaitForExitAsync(linked.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { try { p.Kill(true); } catch { /* 已退出 */ } return null; }
+            catch (OperationCanceledException)
+            {
+                try { p.Kill(true); } catch { /* 已退出 */ }
+                _log.Warn("[wv2] 外部抓取器超时（120s）——回退内嵌 WebView2");
+                return null;
+            }
 
-            if (p.ExitCode != 0 || !File.Exists(outFile)) return null;
+            var errText = await readErr.ConfigureAwait(false);
+            if (p.ExitCode != 0 || !File.Exists(outFile))
+            {
+                _log.Warn($"[wv2] 外部抓取器未取得结果（exit={p.ExitCode}，outFile 存在={File.Exists(outFile)}）"
+                          + (errText.Length > 0 ? "；stderr=" + errText.Substring(0, Math.Min(200, errText.Length)) : "")
+                          + "——回退内嵌 WebView2");
+                return null;
+            }
             var text = await File.ReadAllTextAsync(outFile, ct).ConfigureAwait(false);
             return string.IsNullOrWhiteSpace(text) ? null : text;
         }
