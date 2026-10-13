@@ -132,7 +132,14 @@ public sealed class WikiExportService : IDisposable
             // 但 WebView2 明确「需要同源上下文/人工验证」时**不打 curl**——脚本客户端只会被 CF 拦，
             // 反复试还会延长出口 IP 冷却，此时应中止等验证后续跑（NeedCaptcha）。
             var wv2 = _wv2;
-            var body = await FetchViaWebView2(url, ct).ConfigureAwait(false);
+            // ★ 取数优先级（2026-10-14 重排）：**外部抓取器**（游戏外独立进程、真实浏览器引擎）
+            //   → 内嵌 WebView2 → curl → HttpClient。
+            //   为什么把它提到最前：游戏内嵌 WebView2 的 JS **压根不执行**——renderer 进程活着、
+            //   导航 IsSuccess=True，但 ExecuteScriptAsync 恒返回 {}（05:20 诊断实证），防冻结参数亦无效；
+            //   而同一引擎在游戏外 0.2 秒就取回真实 JSON。独立进程跑浏览器正是 Browsingway 的做法
+            //   （renderer 独立进程 + 离屏），它因此能在全屏与 G-SYNC 下正常工作。
+            var body = await FetchViaExternalHelperAsync(url, ct).ConfigureAwait(false)
+                       ?? await FetchViaWebView2(url, ct).ConfigureAwait(false);
             // 2026-10-13 18:53 反馈 + 火绒环境实证（游戏外复现 renderer 正常、游戏内白屏）：
             // 验证窗口正打开、用户正在手动过 Cloudflare 验证期间，不要回退 curl——
             // 脚本客户端必被 CF 拦（返回 -3）且会延长出口 IP 冷却；应等用户关窗后续跑
@@ -165,6 +172,68 @@ public sealed class WikiExportService : IDisposable
             if (attempt >= MaxRetries) return (null, false, false);
             if (!await DelayAsync(attempt == 0 ? RetryDelayFirstMs : RetryDelayNextMs, ct).ConfigureAwait(false))
                 return (null, false, false);
+        }
+    }
+
+    /// <summary> 外部抓取器 exe 的随插件路径；未随插件发布时为 null（静默回退，不影响既有链路）。 </summary>
+    internal static string? ExternalHelperPath
+    {
+        get
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(typeof(WikiExportService).Assembly.Location);
+                return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "wv2_fetch_helper.exe");
+            }
+            catch { return null; }
+        }
+    }
+
+    /// <summary>
+    /// 用**游戏外独立进程**的真实浏览器引擎取一个 URL 的正文（2026-10-14 新增，取数第一优先级）。
+    /// <para>
+    /// 立论：游戏内嵌 WebView2 的脚本不执行（实测 raw={}），游戏外同引擎 0.2s 可取回真实 JSON；
+    /// 独立进程跑浏览器正是 Browsingway 的做法（renderer 独立进程 + 离屏），故不受全屏/G-SYNC 影响。
+    /// </para>
+    /// 不可用（exe 未随插件发布 / 超时 / 失败）一律返回 null，由调用方回退既有链路——绝不比现状更差。
+    /// </summary>
+    private async Task<string?> FetchViaExternalHelperAsync(string url, CancellationToken ct)
+    {
+        var exe = ExternalHelperPath;
+        if (exe == null || !File.Exists(exe)) return null; // 未随插件发布：静默走老路
+
+        var outFile = Path.Combine(Path.GetTempPath(), "wv2out_" + Guid.NewGuid().ToString("N") + ".txt");
+        try
+        {
+            var psi = new ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("--url=" + url);
+            psi.ArgumentList.Add("--outfile=" + outFile);
+            using var p = Process.Start(psi);
+            if (p == null) return null;
+
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(120)); // 单次上限：启动开销 + 导航 45s + 解析 5s
+            try { await p.WaitForExitAsync(linked.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { try { p.Kill(true); } catch { /* 已退出 */ } return null; }
+
+            if (p.ExitCode != 0 || !File.Exists(outFile)) return null;
+            var text = await File.ReadAllTextAsync(outFile, ct).ConfigureAwait(false);
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"[wv2] 外部抓取器失败（回退内嵌/curl）：{ex.GetType().Name} {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try { if (File.Exists(outFile)) File.Delete(outFile); } catch { /* 临时文件清理失败无妨 */ }
         }
     }
 
