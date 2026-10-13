@@ -46,6 +46,15 @@ public sealed class WikiExportService : IDisposable
     /// <summary> 抓取用 UA（curl 与 HttpClient 共用）。 </summary>
     private const string UserAgentValue = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua";
 
+    /// <summary>
+    /// 插件实际抓取的 API 端点（不含 <c>gapprefix</c>）。UI 的「在浏览器中打开」按钮也用它，
+    /// 保证两处永远一致——2026-10-14 教训：按钮里写了个**不带任何参数**的裸 api.php，
+    /// MediaWiki 于是返回「API 帮助页」，司令官看到的永远是个正常网页，既拿不到 JSON
+    /// 也无从判断 CF 到底拦没拦（「又绕回来了」的真因）。
+    /// </summary>
+    public const string ApiEndpoint = "https://cdn.huijiwiki.com/ff14/api.php?action=query&generator=allpages&format=json&utf8=1"
+        + "&gaplimit=500&prop=revisions&rvprop=content&rvslots=main&gapnamespace=3500";
+
     /// <summary> 相邻请求最小间隔（毫秒）。灰机 wiki 走 Cloudflare，密集请求会被拉黑 IP，故主动放慢。 </summary>
     private const int RequestIntervalMs = 700;
 
@@ -405,9 +414,7 @@ public sealed class WikiExportService : IDisposable
                 var type = prefix.TrimEnd('/');
                 var disp = CategoryFileNameZh(DisplayOf(type));
                 var cur = catResults[type];
-                var api = "https://cdn.huijiwiki.com/ff14/api.php?action=query&generator=allpages&format=json&utf8=1" +
-                          "&gaplimit=500&prop=revisions&rvprop=content&rvslots=main&gapnamespace=3500&gapprefix=" +
-                          Uri.EscapeDataString(prefix);
+                var api = ApiEndpoint + "&gapprefix=" + Uri.EscapeDataString(prefix);
                 var gapCont = "";
                 var rvCont = "";
                 if (progress.TryGetValue(type, out var savedCont))

@@ -85,8 +85,8 @@ public class WikiExportWindow : Window, IDisposable
         // B 路径：绕开游戏内验证窗（火绒等拦渲染导致白窗时尤其有用）。
         // 思路参考 PCL 启动器「获取微软账号授权 → 开外部浏览器窗口」：认证交给真浏览器去做，
         // 绝不在游戏内硬嵌一个渲染不出来的 WebView2。
-        Ui.Hint("绕开游戏内验证窗（B 路径）：①点「在浏览器中打开验证页」——打开的是插件实际抓取的 API 端点（CF 只拦它，wiki 首页通常一路畅通所以不弹验证）；②在真浏览器完成验证后按 F12 → Application → Cookies → 该站点，复制 cf_clearance 的值；③粘贴下方点「导入 cf_clearance」→ 之后游戏内不再弹验证窗（自然无白窗）。");
-        Ui.Hint("若浏览器始终不弹验证：先查 Cookies 里是否已存在 cf_clearance（多半已有，直接复制就行，不必再触发验证）；确实没有就用「隐私/无痕窗口」重开——全新 profile 必定触发 Cloudflare 验证。");
+        Ui.Hint("2026-10-14 实测更正：Cloudflare 按 TLS 指纹识别客户端——真实浏览器引擎直连灰机 API 是通的（游戏外探针用插件同一个 profile，0.2 秒拿到词条 JSON），被拦的只有 curl/HttpClient 这类脚本客户端。所以游戏内白窗并不是 CF 挑战页。");
+        Ui.Hint("手动备一份 cf_clearance 仍是可选退路：点「在浏览器中打开抓取端点」，真浏览器里按 F12 → Application → Cookies → 该站点，复制 cf_clearance 的值粘贴到下方；页面直接返回 JSON 即畅通，无需 cookie。");
         ImGui.SetNextItemWidth(Math.Max(200f, ImGui.GetContentRegionAvail().X - 300f));
         ImGui.InputText("##CfClearance", ref _cfInput, 1024);
         ImGui.SameLine();
@@ -100,13 +100,15 @@ public class WikiExportWindow : Window, IDisposable
             }, TaskScheduler.Default);
         }
         ImGui.SameLine();
-        if (ImGui.Button("在浏览器中打开验证页##CfOpenBrowser"))
+        if (ImGui.Button("在浏览器中打开抓取端点##CfOpenBrowser"))
         {
-            // 必须开「插件实际抓取的 API 端点」：CF 拦的正是它；开 wiki 首页对本机浏览器往往一路畅通，
-            // 压根不弹验证，自然也拿不到新的 cf_clearance（2026-10-14 司令官实测「打开的是正常网站」）。
-            OpenUrl("https://cdn.huijiwiki.com/ff14/api.php");
+            // 必须开「带全部参数的真实抓取端点」：裸 api.php 只会返回 MediaWiki 的 API 帮助页，
+            // 根本看不出 CF 拦没拦（2026-10-14 司令官实测「打开的是正常网站，又绕回来了」的真因）。
+            OpenUrl(WikiExportService.ApiEndpoint);
             _result += (_result.Length > 0 ? "\n" : "")
-                       + "[提示] 已用默认浏览器打开抓取端点（api.php）。若浏览器没弹 Cloudflare 验证：先看它的 Cookies 里是否已存在 cf_clearance（多半已有，直接复制即可）；仍没有就用「隐私/无痕窗口」重开一次——全新 profile 必定触发验证。";
+                       + "[提示] 已用默认浏览器打开插件实际抓取的端点。2026-10-14 实测：真实浏览器引擎访问它"
+                       + "直接返回词条 JSON（CF 按 TLS 指纹放行浏览器、只拦 curl 这类脚本客户端）——"
+                       + "返回 JSON 即畅通，无需 cf_clearance；只有出现「请稍候…」才是被拦，那时再手动取 cookie。";
         }
         ImGui.Spacing();
 

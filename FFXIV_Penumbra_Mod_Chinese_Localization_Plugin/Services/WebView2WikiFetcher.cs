@@ -277,10 +277,14 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _reaper?.Dispose();
         _reaper = null;
         if (_thread?.IsAlive != true) return;
-        _log.Info("[wv2] 消息泵空闲超过 10 分钟，STA 线程自退（WebView2 进程组已释放；下次提取自动重启，cookie 在持久 profile 内不丢失）");
+        _log.Info("[wv2] 消息泵空闲超过 10 分钟，STA 线程自退（先关闭控制器以释放 WebView2 进程组；下次提取自动重启，cookie 在持久 profile 内不丢失）");
         MarkUnavailable("消息泵空闲自退（下次提取自动重启）");
         _captchaPending = false;
-        // 先发退出信号（此刻窗口句柄还有效），再清引用：
+        // ★ 顺序不能反：先关控制器（在泵线程上），再发退出信号。
+        // 旧代码只发 WM_QUIT —— 线程退了、窗口也销毁了，但 msedgewebview2 进程组**并不跟着退**
+        // （2026-10-14 实测残留 7 个孤儿进程长期占住 profile），日志里那句「进程组已释放」是错的。
+        CloseControllerOnPumpThread("空闲自退");
+        // 再发退出信号（此刻窗口句柄还有效），最后清引用：
         // 旧窗口随线程退出被 Windows 销毁、旧控制器随之失效——清引用可防懒重启的
         // 「就绪等待」被这些死值瞬间骗过（假就绪），也便于 GC 回收。
         if (_hwnd != IntPtr.Zero) { try { PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { /* 已退 */ } }
@@ -792,8 +796,23 @@ internal sealed class WebView2WikiFetcher : IDisposable
                           + "Chromium 沙箱已放松，仅用于验证火绒是否拦截渲染；验证后请删除该环境变量恢复默认。");
             var envOpts = new CoreWebView2EnvironmentOptions(BuildWebView2Args(emergencyOn));
             CoreWebView2Environment env;
-            if (options != null) env = await CoreWebView2Environment.CreateAsync(options, _profileDir, envOpts);
-            else env = await CoreWebView2Environment.CreateAsync(null, _profileDir, envOpts); // 无显式 runtime：自动探测
+            try
+            {
+                // 2026-10-14 实测：持久 profile 被残留的 msedgewebview2 进程占用时，CreateAsync
+                // **永不返回**（既不成功也不抛错），插件就这样一直卡在「初始化中」——
+                // 加超时把它变成可诊断的明确失败，而不是无限期的哑火。
+                var createTask = options != null
+                    ? CoreWebView2Environment.CreateAsync(options, _profileDir, envOpts)
+                    : CoreWebView2Environment.CreateAsync(null, _profileDir, envOpts); // 无显式 runtime：自动探测
+                env = await createTask.WaitAsync(TimeSpan.FromSeconds(40));
+            }
+            catch (TimeoutException)
+            {
+                _lastError = "创建 WebView2 环境超时（40s）：持久 profile 多半被残留的 msedgewebview2 进程占用";
+                _available = false;
+                _log.Error("[wv2] " + _lastError + "——请结束残留的 msedgewebview2 进程后重试；本次提取回退 curl");
+                return;
+            }
 
             _ctl = await env.CreateCoreWebView2ControllerAsync(_hwnd);
             _log.Info("[wv2] 控制器已绑定，停在 about:blank…");
@@ -849,7 +868,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _disposed = true;
         _watchdog?.Dispose();
         _reaper?.Dispose();
-        try { _ctl?.Close(); } catch { /* 已释放/未创建 */ }
+        // ★ 关控制器必须走泵线程（详见 CloseControllerOnPumpThread 注释）。旧写法在本线程直接
+        //   _ctl?.Close() 属跨线程调用，被 WebView2 拒绝后异常又被 catch 吞掉，进程组从不退出。
+        CloseControllerOnPumpThread("插件卸载");
         try
         {
             if (_hwnd != IntPtr.Zero)
@@ -863,6 +884,52 @@ internal sealed class WebView2WikiFetcher : IDisposable
         }
         catch { /* 忽略 */ }
         _available = false;
+    }
+
+    /// <summary>
+    /// 在 **WebView2 的 STA 泵线程** 上关闭控制器并等待完成。
+    /// <para>
+    /// 2026-10-14 实测定位到的白窗根因：<c>CoreWebView2Controller.Close()</c> 有线程亲和性，
+    /// 必须在创建它的那个 STA 泵线程上调用。旧代码在卸载线程直接 <c>_ctl?.Close()</c>，
+    /// 跨线程调用被拒绝、异常又被 <c>catch</c> 吞掉，于是 <c>msedgewebview2</c> 进程组**从不退出**。
+    /// 实测残留 7 个孤儿进程（启动于 2:44，游戏早已退出），长期占住持久 profile：
+    /// 后续实例 <c>CreateAsync</c> 静默挂起、renderer 不干活 → 游戏内白窗、
+    /// <c>ExecuteScriptAsync</c> 返回 null（被 ClassifyRaw 判成「跨源被拒」，即日志里那串报错的真身）。
+    /// </para>
+    /// 卸载与空闲自退都**必须先调它**再退线程——顺序反了就又是孤儿进程。
+    /// </summary>
+    private void CloseControllerOnPumpThread(string reason)
+    {
+        if (_hwnd == IntPtr.Zero || _thread?.IsAlive != true)
+        {
+            _ctl = null; // 线程已死/无窗口：无从投递，只能清引用（进程组此时已随线程窗口销毁）
+            return;
+        }
+        using var closed = new ManualResetEventSlim(false);
+        PumpQueue.Enqueue(() =>
+        {
+            try
+            {
+                if (_ctl != null)
+                {
+                    _ctl.Close();
+                    _log.Info($"[wv2] 控制器已关闭（{reason}）——WebView2 进程组将正常退出，不再残留孤儿进程");
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"[wv2] 关闭控制器异常（{reason}）：{ex.GetType().Name} {Truncate(ex.Message, 120)}");
+            }
+            finally
+            {
+                _ctl = null;
+                _available = false;
+                closed.Set();
+            }
+        });
+        WakePump();
+        if (!closed.Wait(TimeSpan.FromSeconds(8)))
+            _log.Warn($"[wv2] 关闭控制器等待超时（{reason}）——进程组可能仍会残留，可手动结束 msedgewebview2 进程");
     }
 
     /// <summary> 把 await 续体投递回 WebView2 线程（铁律②：投 PumpQueue + 唤醒消息泵）。 </summary>
