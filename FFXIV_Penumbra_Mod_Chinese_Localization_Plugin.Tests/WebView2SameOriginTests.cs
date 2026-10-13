@@ -102,3 +102,32 @@ public class WebView2SameOriginTests
             WikiExportService.DecideAfterWebView2(null, captchaPending: false));
     }
 }
+
+/// <summary>
+/// 回归测试：抓取器窗口类名必须**每实例唯一**（2026-10-13 12:47 实测事故的根因）。
+/// 窗口类是进程级全局命名资源：固定类名在插件热重载后 RegisterClassEx 必撞名（1410），
+/// 新窗口消息被派发到旧实例的 WndProc、排空旧 DLL 实例的静态队列 → 新实例 await 续体
+/// （含 15s 超时兜底）全部饿死且毫无日志。游戏外复现程序（90_补丁与中间产物\wv2_class_repro.cs）
+/// 已证实该机制：固定类名第二个实例就绪=False，唯一类名=True。
+/// </summary>
+public class WebView2WindowClassNameTests
+{
+    [Fact]
+    public void 窗口类名_每次生成都不同_防热重载撞名()
+    {
+        var a = WebView2WikiFetcher.NewWindowClassName();
+        var b = WebView2WikiFetcher.NewWindowClassName();
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
+    public void 窗口类名_带固定前缀与32位Guid段()
+    {
+        var name = WebView2WikiFetcher.NewWindowClassName();
+        const string prefix = "PMHWebView2FetcherV2_";
+        Assert.StartsWith(prefix, name);
+        var suffix = name[prefix.Length..];
+        Assert.Equal(32, suffix.Length); // Guid.ToString("N") 为 32 位十六进制
+        Assert.All(suffix, c => Assert.True(char.IsAsciiHexDigit(c), $"Guid 段含非十六进制字符：{c}"));
+    }
+}

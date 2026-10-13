@@ -25,6 +25,10 @@ namespace FFXIVPenumbraHanhua.Services;
 ///    必被 CORS 拒（2026-10-13 实测：<c>ExecuteScriptAsync</c> 返回非字符串 → 旧代码抛 JsonException）——
 ///    故取数前须先导航到 <b>wiki 同源页</b>（见 <see cref="ShowCaptchaWindow"/>：弹可见窗口请司令官过 CF，
 ///    导航完成后 WebView2 即停在同源页，后续 fetch 同源可取，cf_clearance 亦在持久 profile 内复用）。
+/// ④ <b>窗口类名每实例唯一</b>（<see cref="NewWindowClassName"/>）：窗口类是<b>进程级全局命名资源</b>，
+///    固定类名在热重载后 RegisterClassEx 必撞名（1410）——新窗口沿用旧实例的 WndProc，排空的是旧 DLL
+///    实例的静态队列，本实例 await 续体（含超时兜底）全部饿死且毫无日志（2026-10-13 12:47 实测，
+///    游戏外复现程序证实）。与 10-11 验证窗口类名唯一化是同一课。
 /// </para>
 /// <para>
 /// 失败一律置 <see cref="IsAvailable"/>=false，由调用方回退 curl 路径——不会让功能更差。
@@ -69,13 +73,13 @@ internal sealed class WebView2WikiFetcher : IDisposable
     [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandle(string? n);
+    [DllImport("kernel32.dll")] private static extern uint GetLastError();
     [DllImport("user32.dll")] private static extern int GetMessage(out MSG m, IntPtr h, uint a, uint b);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG m);
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG m);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
 
-    private const string WndClassName = "PMHWebView2FetcherV2";
     private const uint WM_APP = 0x8000;
     private const uint WM_APP_PUMP = WM_APP + 1;
     private const uint WM_CLOSE = 0x0010;
@@ -92,6 +96,14 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 消息泵唯一队列：SyncContext 投递与消息泵排空必须用同一个（铁律②）。 </summary>
     private static readonly ConcurrentQueue<Action> PumpQueue = new();
 
+    /// <summary>
+    /// 生成<b>每实例唯一</b>的窗口类名（铁律④）。窗口类是进程级全局命名资源，固定类名在热重载后
+    /// 必撞名（RegisterClassEx 1410）→ 新窗口消息派发到旧实例 WndProc → 本实例队列饿死、await 静默卡死。
+    /// </summary>
+    internal static string NewWindowClassName() => "PMHWebView2FetcherV2_" + Guid.NewGuid().ToString("N");
+
+    private readonly string _wndClassName = NewWindowClassName();
+
     private static WndProcDelegate? _wndProcKeep;
     private IntPtr _hwnd;
 
@@ -101,6 +113,8 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private Thread? _thread;
     private volatile bool _disposed;
     private volatile bool _captchaPending;
+    private Timer? _watchdog;
+    private int _watchdogCount;
     private readonly AppLog _log;
 
     public bool IsAvailable => _available;
@@ -135,6 +149,22 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _thread = new Thread(ThreadMain) { IsBackground = true, Name = "PMH-WebView2Fetcher" };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
+        // 看门狗（线程池定时器，**不依赖消息泵**）：初始化一旦因泵饿死之类的原因卡住，
+        // await 续体连「15s 超时」日志都不会打（2026-10-13 12:47 静默 30 分钟的教训）——
+        // 由它定期上报线程/窗口/错误态，把静默卡死变成即时诊断。就绪或卸载后自动停。
+        _watchdog = new Timer(_ => WatchdogTick(), null, TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary> 初始化超过 45 秒仍未就绪时定期上报（约 3 分钟后停止刷屏）。 </summary>
+    private void WatchdogTick()
+    {
+        if (_disposed || _available) return;
+        _watchdogCount++;
+        var waited = 45 + (_watchdogCount - 1) * 30;
+        var err = string.IsNullOrEmpty(_lastError) ? "(无)" : _lastError;
+        _log.Error($"[wv2] 初始化 {waited} 秒仍未就绪（STA 线程存活={_thread?.IsAlive}，" +
+                   $"窗口=0x{(_hwnd == IntPtr.Zero ? 0 : _hwnd.ToInt64()):X}，最后错误={err}）——抓取将回退 curl");
+        if (_watchdogCount >= 6) _watchdog?.Dispose();
     }
 
     /// <summary>
@@ -329,12 +359,28 @@ internal sealed class WebView2WikiFetcher : IDisposable
             lpfnWndProc = _wndProcKeep,
             hInstance = hInst,
             hCursor = LoadCursor(IntPtr.Zero, (IntPtr)IDC_ARROW),
-            lpszClassName = WndClassName,
+            lpszClassName = _wndClassName, // 每实例唯一（铁律④）：撞名=消息派发到旧实例 WndProc=本实例队列饿死
         };
-        RegisterClassEx(ref wc); // 可能已注册（热重载残留），返回 0 不致命
+        if (RegisterClassEx(ref wc) == 0)
+        {
+            // 唯一类名下注册失败是真异常（固定类名时代的「热重载残留」容忍已移除）：
+            // 没有自己的类，窗口消息就会派发到别人的 WndProc，本实例消息泵形同虚设。
+            var err = GetLastError();
+            _lastError = $"RegisterClassEx 失败（Win32 错误码 {err}）";
+            _log.Error($"[wv2] 注册窗口类失败（类名 {_wndClassName}，Win32 错误码 {err}）——放弃 WebView2，回退 curl");
+            _available = false;
+            return;
+        }
         // 按验证窗口尺寸创建（默认不可见；WebView2 内容大小随宿主窗口而定，验证时只需 MoveWindow+Show）
-        _hwnd = CreateWindowEx(0, WndClassName, "wv2", WS_OVERLAPPEDWINDOW,
+        _hwnd = CreateWindowEx(0, _wndClassName, "wv2", WS_OVERLAPPEDWINDOW,
             0, 0, CaptchaWidth, CaptchaHeight, IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero);
+        if (_hwnd == IntPtr.Zero)
+        {
+            var err = GetLastError();
+            _lastError = $"CreateWindowEx 失败（Win32 错误码 {err}）";
+            _log.Error($"[wv2] 创建抓取窗口失败（Win32 错误码 {err}）——放弃 WebView2，回退 curl");
+            _available = false;
+        }
     }
 
     private IntPtr WndProc(IntPtr h, uint m, IntPtr w, IntPtr l)
@@ -415,6 +461,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _watchdog?.Dispose();
         try { if (_hwnd != IntPtr.Zero) { DestroyWindow(_hwnd); _hwnd = IntPtr.Zero; } } catch { /* 忽略 */ }
         _available = false;
     }
