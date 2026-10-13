@@ -62,6 +62,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
         public uint time; public int px, py;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern ushort RegisterClassEx(ref WNDCLASSEX c);
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -79,10 +82,12 @@ internal sealed class WebView2WikiFetcher : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG m);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT rc);
 
     private const uint WM_APP = 0x8000;
     private const uint WM_APP_PUMP = WM_APP + 1;
     private const uint WM_CLOSE = 0x0010;
+    private const uint WM_SIZE = 0x0005;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int SW_SHOW = 5;
     private const int SW_HIDE = 0;
@@ -255,11 +260,15 @@ internal sealed class WebView2WikiFetcher : IDisposable
             try
             {
                 _log.Info("[wv2] 显示验证窗口，请司令官在窗口内完成 Cloudflare 验证…");
-                // 窗口按验证尺寸创建但默认隐藏：居中放大并显示（WebView2 内容已随窗口大小就绪）
+                // 窗口按验证尺寸创建但默认隐藏：居中放大并显示
                 var x = Math.Max(0, (GetSystemMetrics(0) - CaptchaWidth) / 2);
                 var y = Math.Max(0, (GetSystemMetrics(1) - CaptchaHeight) / 2);
                 MoveWindow(_hwnd, x, y, CaptchaWidth, CaptchaHeight, true);
                 ShowWindow(_hwnd, SW_SHOW);
+                // WebView2 控制器是在「隐藏」宿主窗口上初始化的，不会自动合成画面；
+                // 显示后必须按宿主客户区**显式重设 Bounds** 才会渲染
+                // （2026-10-13 实测：只 MoveWindow+ShowWindow 会是整片空白，页面加载了但不合成）。
+                SyncWebViewBounds();
                 _captchaPending = false; // 窗口已弹出，进入「用户操作中」；关闭时再清一次并通知 UI 续跑
                 _ctl!.CoreWebView2.Navigate(url);
                 // 监听：一旦导航到非挑战内容，视为验证通过
@@ -271,6 +280,21 @@ internal sealed class WebView2WikiFetcher : IDisposable
             }
         });
         WakePump();
+    }
+
+    /// <summary> 把 WebView2 显示区域同步为宿主窗口客户区（隐藏窗口上初始化的控制器不会自动合成画面，必须显式重设）。 </summary>
+    private void SyncWebViewBounds()
+    {
+        if (_ctl == null || _hwnd == IntPtr.Zero) return;
+        try
+        {
+            if (GetClientRect(_hwnd, out var r))
+                _ctl.Bounds = new System.Drawing.Rectangle(0, 0, r.Right - r.Left, r.Bottom - r.Top);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"[wv2] 重设 WebView2 显示区域失败：{ex.GetType().Name} {Truncate(ex.Message, 100)}");
+        }
     }
 
     /// <summary> 进入「等待人工验证」状态并通知 UI 弹窗（每轮只通知一次；弹窗/关窗/取到数据时清状态）。 </summary>
@@ -401,6 +425,17 @@ internal sealed class WebView2WikiFetcher : IDisposable
             try { OnCaptchaWindowClosed?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
             return IntPtr.Zero;
         }
+        else if (m == WM_SIZE)
+        {
+            // 用户拖动改变验证窗口大小：同步 WebView2 显示区域（0x0005；lParam 低16位=客户区宽、高16位=高）
+            var cw = (int)(l.ToInt64() & 0xFFFF);
+            var ch = (int)((l.ToInt64() >> 16) & 0xFFFF);
+            if (_ctl != null && cw > 0 && ch > 0)
+            {
+                try { _ctl.Bounds = new System.Drawing.Rectangle(0, 0, cw, ch); } catch { /* 忽略 */ }
+            }
+            return IntPtr.Zero;
+        }
         return DefWindowProc(h, m, w, l);
     }
 
@@ -462,6 +497,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     {
         _disposed = true;
         _watchdog?.Dispose();
+        try { _ctl?.Close(); } catch { /* 已释放/未创建 */ }
         try { if (_hwnd != IntPtr.Zero) { DestroyWindow(_hwnd); _hwnd = IntPtr.Zero; } } catch { /* 忽略 */ }
         _available = false;
     }
