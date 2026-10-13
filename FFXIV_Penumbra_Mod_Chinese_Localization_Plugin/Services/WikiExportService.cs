@@ -122,8 +122,15 @@ public sealed class WikiExportService : IDisposable
             // WebView2 未就绪/失败即回退 curl，故「WebView2 不可用」只会退回现状，不会让功能更差；
             // 但 WebView2 明确「需要同源上下文/人工验证」时**不打 curl**——脚本客户端只会被 CF 拦，
             // 反复试还会延长出口 IP 冷却，此时应中止等验证后续跑（NeedCaptcha）。
+            var wv2 = _wv2;
             var body = await FetchViaWebView2(url, ct).ConfigureAwait(false);
-            switch (DecideAfterWebView2(body, _wv2?.CaptchaPending == true))
+            // 2026-10-13 18:53 反馈 + 火绒环境实证（游戏外复现 renderer 正常、游戏内白屏）：
+            // 验证窗口正打开、用户正在手动过 Cloudflare 验证期间，不要回退 curl——
+            // 脚本客户端必被 CF 拦（返回 -3）且会延长出口 IP 冷却；应等用户关窗后续跑
+            // （WebV2 已停在 wiki 同源页，关窗后续跑即同源可取）。
+            if (ShouldSkipCurlFallback(body, wv2?.CaptchaWindowVisible == true))
+                return (null, false, true);
+            switch (DecideAfterWebView2(body, wv2?.CaptchaPending == true))
             {
                 case Wv2Decision.NeedCaptcha:
                     return (null, false, true);
@@ -173,6 +180,15 @@ public sealed class WikiExportService : IDisposable
         // 没取到正文：抓取器报「等待验证」→ 等验证续跑；否则（未启用/未就绪/真失败）→ 回退 curl 保底
         return captchaPending ? Wv2Decision.NeedCaptcha : Wv2Decision.FallbackCurl;
     }
+
+    /// <summary>
+    /// 验证窗口正打开、用户正在手动过 Cloudflare 验证、且 WebView2 未取得正文时，
+    /// 是否应跳过 curl 回退（避免脚本客户端必 -3 且延长出口 IP 冷却），改等用户关窗后续跑。
+    /// 纯函数，便于单测；仅当「没取到正文」且「验证窗口正显示」才拦截——取到正文（数据/挑战页）
+    /// 一律交给 <see cref="DecideAfterWebView2"/> 走正常分流。
+    /// </summary>
+    internal static bool ShouldSkipCurlFallback(string? body, bool captchaWindowVisible)
+        => body == null && captchaWindowVisible;
 
     /// <summary> 可取消等待；被取消返回 false（不抛异常，交由调用方按 ct 判定）。 </summary>
     private static async Task<bool> DelayAsync(int ms, CancellationToken ct)

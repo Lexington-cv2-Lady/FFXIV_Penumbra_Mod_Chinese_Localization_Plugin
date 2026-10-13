@@ -313,3 +313,45 @@ public class WebView2FetchUnavailableTests
         Assert.Equal(0, y);
     }
 }
+
+/// <summary>
+/// 回归测试：验证窗口「逃生门」语义 + 「验证窗口打开期间屏蔽 curl 回退」（2026-10-13 18:53 反馈 + 火绒环境实证）。
+/// <para>
+/// 背景：18:53 实录两个漏改——①「隐藏验证窗口」曾是「与点 X 等效（隐藏 + 通知续跑）」，
+/// 导致隐藏后立刻被「关窗自动续跑」重新弹回（「隐藏功能无效」）；②「停止等待」只清 UI 标志、从不收窗
+/// （「停止也没自动关闭窗口」）；③ 验证窗口打开期间 fetch 仍回退 curl，必 -3 且延长出口 IP 冷却。
+/// 本文件锁住①②的 fetcher 级语义与③的纯函数判据。
+/// </para>
+/// </summary>
+public class WebView2CaptchaWindowEscapeTests
+{
+    [Fact]
+    public void CaptchaWindowVisible_新建fetcher_默认false()
+    {
+        var f = new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+        Assert.False(f.CaptchaWindowVisible);
+    }
+
+    [Fact]
+    public void HideCaptchaWindow_仅隐藏_不触发关窗续跑信号()
+    {
+        // 关键回归：隐藏曾是「隐藏 + 通知续跑」，导致隐藏后被自动续跑重新弹回（18:53 实录「隐藏功能无效」）。
+        // 现改为：隐藏只收窗，不触发 OnCaptchaWindowClosed（真实关窗续跑仍走 WM_CLOSE 路径）。
+        var fired = false;
+        var f = new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+        f.OnCaptchaWindowClosed = () => fired = true;
+        f.HideCaptchaWindow();
+        Assert.False(fired);                 // 隐藏不触发续跑信号
+        Assert.False(f.CaptchaWindowVisible); // 窗口可见态已收起
+    }
+
+    [Theory]
+    [InlineData(null, true, true)]    // 窗口开着、WebView2 没取到 → 跳过 curl，等用户关窗续跑
+    [InlineData(null, false, false)]  // 窗口没开 → 照旧回退 curl 保底
+    [InlineData("{\"x\":1}", true, false)]   // 取到正文（数据）→ 不在此拦截，交 Decide 分流
+    [InlineData("<script>cf_chl</script>", true, false)] // 拿到挑战页 → 由 Decide 判 NeedCaptcha，不在此拦
+    public void ShouldSkipCurlFallback_各情形(string? body, bool windowVisible, bool expected)
+    {
+        Assert.Equal(expected, WikiExportService.ShouldSkipCurlFallback(body, windowVisible));
+    }
+}

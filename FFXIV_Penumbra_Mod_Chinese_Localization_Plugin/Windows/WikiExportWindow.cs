@@ -149,10 +149,11 @@ public class WikiExportWindow : Window, IDisposable
                 ImGui.SameLine();
                 if (ImGui.Button("停止等待##CapStopTop"))
                 {
+                    _plugin.Wiki.HideCaptchaWindow(); // 实际收起验证窗口（隐藏不销毁，WebView2/cookie 保留）
                     _awaitingCaptchaResume = false;
                     _captchaWindowClosed = false;
                     _captchaResumeUsed = false;
-                    _result += "\n[提示] 已停止自动续跑；重新点「开始提取」即可（断点已保存）。";
+                    _result += "\n[提示] 已停止自动续跑并收起验证窗口；重新点「开始提取」即可（断点已保存）。";
                 }
             }
         }

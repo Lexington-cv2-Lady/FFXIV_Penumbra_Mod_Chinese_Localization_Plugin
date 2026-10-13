@@ -200,6 +200,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 当前窗口类名（每实例唯一；重启时更换——供测试锁「重启必须换类名」）。 </summary>
     internal string WindowClassName => _wndClassName;
 
+    /// <summary> 验证窗口是否正显示（司令官操作中）：供 service 判断「是否正处于人工验证中」以屏蔽 curl 回退。 </summary>
+    internal bool CaptchaWindowVisible => _captchaWindowVisible;
+
     /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。线程已死时自动重起（空闲自退后的懒重启）。 </summary>
     public void Start()
     {
@@ -468,20 +471,26 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
     /// <summary>
     /// 手动隐藏验证窗口（UI 逃生门）：白窗/窗口被全屏游戏挡住点不到 X 时，
-    /// 司令官可从插件界面点「隐藏验证窗口」把它收掉（与点 X 等效：隐藏不销毁 + 通知续跑）。
+    /// 司令官可从插件界面点「隐藏验证窗口」把它收掉。注意：隐藏**不**触发
+    /// <see cref="OnCaptchaWindowClosed"/>——「收起暂存」与「用户点 X 真正关闭（触发关窗续跑）」
+    /// 是两种意图，共用同一信号会让「隐藏」后立即被自动续跑重新弹回（2026-10-13 18:53 实录
+    /// 「隐藏功能无效」）。隐藏后 WebView2 与持久 profile/cookie 仍在，可随时「重新打开验证窗口」。
     /// </summary>
     public void HideCaptchaWindow()
     {
         if (_disposed) return;
+        // 收起「用户操作中」态（空闲 reaper 恢复计时）；同时清 _captchaPending 表示「等待」暂止——
+        // 用户稍后重新打开/重新提取会再次按需触发验证。
         _captchaWindowVisible = false;
+        _captchaPending = false;
         TouchPumpActivity();
         PumpQueue.Enqueue(() =>
         {
             try { if (_hwnd != IntPtr.Zero) ShowWindow(_hwnd, SW_HIDE); } catch { /* 已没 */ }
         });
         WakePump();
-        _captchaPending = false;
-        try { OnCaptchaWindowClosed?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
+        // 关键：隐藏**不**调用 OnCaptchaWindowClosed——否则会被 UI 的「关窗自动续跑」当成真实关闭，
+        // 立刻重新弹出验证窗口，隐藏形同无效。
     }
 
     /// <summary> 把 WebView2 显示区域同步为宿主窗口客户区（隐藏窗口上初始化的控制器不会自动合成画面，必须显式重设）。 </summary>
