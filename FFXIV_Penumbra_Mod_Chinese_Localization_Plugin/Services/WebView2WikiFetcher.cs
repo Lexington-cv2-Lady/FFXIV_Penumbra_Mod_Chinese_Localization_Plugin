@@ -119,9 +119,24 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private Thread? _thread;
     private volatile bool _disposed;
     private volatile bool _captchaPending;
+    private volatile bool _captchaWindowVisible; // 验证窗口正在显示（司令官操作中）：此时消息泵永不空闲自退
+    private long _lastPumpActivityTicks;         // 上次业务投递（fetch/弹窗）时间：空闲自退判据（Interlocked 读写）
     private Timer? _watchdog;
     private int _watchdogCount;
+    private Timer? _reaper;                       // 空闲回收定时器（线程池，不依赖消息泵）
     private readonly AppLog _log;
+
+    /// <summary> 消息泵空闲自退阈值：超过此时长无业务投递且验证窗口不可见 → STA 线程自行退出省内存；下次提取自动重启。 </summary>
+    private static readonly TimeSpan PumpIdleExitLimit = TimeSpan.FromMinutes(10);
+
+    /// <summary> 上次业务投递时间（跨线程安全：Interlocked 读写 ticks——volatile 不适用于 DateTime 结构体）。 </summary>
+    private DateTime LastPumpActivity
+    {
+        get => new(Interlocked.Read(ref _lastPumpActivityTicks));
+        set => Interlocked.Exchange(ref _lastPumpActivityTicks, value.Ticks);
+    }
+
+    private void TouchPumpActivity() => LastPumpActivity = DateTime.UtcNow;
 
     public bool IsAvailable => _available;
     public string? LastError => _lastError;
@@ -164,17 +179,64 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 是否正处于「等待人工验证」状态（fetch 因跨源/挑战页失败且已通知 UI 弹窗）。 </summary>
     public bool CaptchaPending => _captchaPending;
 
-    /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。 </summary>
+    /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。线程已死时自动重起（空闲自退后的懒重启）。 </summary>
     public void Start()
     {
-        if (_thread != null) return;
+        if (_thread?.IsAlive == true) return; // 判活而非判非 null：空闲自退后下次提取要能重起
+        TouchPumpActivity();
         _thread = new Thread(ThreadMain) { IsBackground = true, Name = "PMH-WebView2Fetcher" };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
         // 看门狗（线程池定时器，**不依赖消息泵**）：初始化一旦因泵饿死之类的原因卡住，
         // await 续体连「15s 超时」日志都不会打（2026-10-13 12:47 静默 30 分钟的教训）——
         // 由它定期上报线程/窗口/错误态，把静默卡死变成即时诊断。就绪或卸载后自动停。
-        _watchdog = new Timer(_ => WatchdogTick(), null, TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(30));
+        _watchdog ??= new Timer(_ => WatchdogTick(), null, TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(30));
+        // 空闲回收（同为线程池定时器）：稳态下长期无提取时把 STA 线程与 WebView2 进程组收掉省内存；
+        // 2026-10-13 16:16 事故的教训——线程寿命绝不能压过「用户正在过 CF 验证」的时长，
+        // 故自退条件必须排除验证窗口可见期，且只由不依赖消息泵的定时器执行。
+        _reaper ??= new Timer(_ => ReaperTick(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+    }
+
+    /// <summary>
+    /// 消息泵空闲自退判据（纯函数，可单测）。
+    /// 2026-10-13 16:16 事故：原 Pump 带 300 秒绝对 deadline，用户正在过 Cloudflare 验证时
+    /// （16:16:13 弹窗）线程于 16:16:55 到期静默退出 → Windows 销毁线程窗口 → WebView2 进程组
+    /// 清零 → 全程无日志。故「线程活着」必须以业务活动为准，不得有与用户操作竞速的绝对上限。
+    /// </summary>
+    internal static bool PumpShouldReap(DateTime nowUtc, DateTime lastActivityUtc, bool captchaWindowVisible, TimeSpan idleLimit)
+        => !captchaWindowVisible && (nowUtc - lastActivityUtc) >= idleLimit;
+
+    /// <summary>
+    /// 确保抓取线程在场：空闲自退（或初始化失败退出）后，下次提取自动重启并等待就绪。
+    /// 线程活着但不重起（哪怕未就绪）——避免双线程双窗口；持久 profile 的 cookie 不随线程退出丢失。
+    /// </summary>
+    private void EnsureThread()
+    {
+        if (_disposed || _thread?.IsAlive == true) return;
+        _log.Info("[wv2] 抓取线程不在（此前空闲自退），自动重启…");
+        _captchaPending = false;
+        Start();
+        var deadline = DateTime.UtcNow.AddSeconds(20); // 初始化实测约 2 秒，给足余量
+        while (!_disposed && DateTime.UtcNow < deadline)
+        {
+            if (_available && _ctl != null) { _log.Info("[wv2] 重启后就绪"); return; }
+            Thread.Sleep(200);
+        }
+        _log.Warn("[wv2] 重启后 20 秒仍未就绪，本次提取回退 curl");
+    }
+
+    /// <summary> 空闲回收：超过 <see cref="PumpIdleExitLimit"/> 无业务投递且验证窗口不可见 → WM_QUIT 自退。 </summary>
+    private void ReaperTick()
+    {
+        if (_disposed || _captchaWindowVisible) return;
+        if (!PumpShouldReap(DateTime.UtcNow, LastPumpActivity, _captchaWindowVisible, PumpIdleExitLimit)) return;
+        _reaper?.Dispose();
+        _reaper = null;
+        if (_thread?.IsAlive != true) return;
+        _log.Info("[wv2] 消息泵空闲超过 10 分钟，STA 线程自退（WebView2 进程组已释放；下次提取自动重启，cookie 在持久 profile 内不丢失）");
+        MarkUnavailable("消息泵空闲自退（下次提取自动重启）");
+        _captchaPending = false;
+        if (_hwnd != IntPtr.Zero) { try { PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { /* 已退 */ } }
     }
 
     /// <summary> 初始化超过 45 秒仍未就绪时定期上报（约 3 分钟后停止刷屏）。 </summary>
@@ -199,7 +261,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// </summary>
     public string? Fetch(string url, CancellationToken ct)
     {
+        EnsureThread(); // 空闲自退后的懒重启（线程死才重起；活着哪怕未就绪也不动）
         if (_disposed || !_available || _ctl == null) return null;
+        TouchPumpActivity();
 
         using var done = new ManualResetEventSlim(false);
         string? result = null;
@@ -281,6 +345,10 @@ internal sealed class WebView2WikiFetcher : IDisposable
     public void ShowCaptchaWindow(string url)
     {
         if (_disposed || _ctl == null) return;
+        // 验证窗口一显示就进入「司令官操作中」：消息泵空闲自退必须为其让路
+        // （2026-10-13 16:16 事故：过 CF 验证时线程被绝对 deadline 收掉，前功尽弃）。
+        _captchaWindowVisible = true;
+        TouchPumpActivity();
         PumpQueue.Enqueue(() =>
         {
             try
@@ -448,6 +516,8 @@ internal sealed class WebView2WikiFetcher : IDisposable
             // 并通知外部「验证窗口已关闭」→ UI 从断点自动续跑（此时 WebView2 已停在 wiki 同源页）。
             ShowWindow(h, SW_HIDE);
             _captchaPending = false;
+            _captchaWindowVisible = false; // 用户操作期结束，空闲自退恢复计时
+            TouchPumpActivity();
             try { OnCaptchaWindowClosed?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
             return IntPtr.Zero;
         }
@@ -467,12 +537,19 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
     private void Pump()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(300);
-        while (!_disposed && DateTime.UtcNow < deadline)
+        // 铁律：线程与控制器同生共死——循环**没有**绝对 deadline。
+        // 历史事故：曾有 300 秒上限，用户正在过 CF 验证时线程到期静默退出 → Windows 销毁
+        // 线程创建的窗口 → WebView2 进程组清零 → 全程无日志（2026-10-13 16:16:55 实测）。
+        // 退出只认三条路：① Dispose 的 WM_QUIT；② 空闲 reaper 的 WM_QUIT；③ 窗口消息到达时
+        // 顺带做的空闲检查（PumpShouldReap）。GetMessage 阻塞期间线程天然存活，不耗 CPU。
+        TouchPumpActivity();
+        while (!_disposed)
         {
-            if (GetMessage(out var m, IntPtr.Zero, 0, 0) <= 0) break;
+            if (GetMessage(out var m, IntPtr.Zero, 0, 0) <= 0) break; // WM_QUIT 返回 0
             TranslateMessage(ref m);
             DispatchMessage(ref m);
+            if (PumpShouldReap(DateTime.UtcNow, LastPumpActivity, _captchaWindowVisible, PumpIdleExitLimit))
+                break;
         }
     }
 
@@ -523,6 +600,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     {
         _disposed = true;
         _watchdog?.Dispose();
+        _reaper?.Dispose();
         try { _ctl?.Close(); } catch { /* 已释放/未创建 */ }
         try
         {

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.1.8.6</Version>
+    <Version>1.1.8.7</Version>
     <!-- 禁用 NuGet 漏洞审计：本机到 api.nuget.org 的链路被重置，审计失败会刷 NU1900 噪声警告（与代码无关） -->
     <NuGetAudit>false</NuGetAudit>
     <!-- 插件 ID（InternalName）= 程序集名，必须为 ASCII；显示名（Name）用中文。 -->

@@ -1,3 +1,4 @@
+using System;
 using FFXIVPenumbraHanhua.Services;
 using Xunit;
 
@@ -201,5 +202,42 @@ public class WebView2FetchUnavailableTests
         var svc = new WikiExportService(new AppLog());
         svc.Dispose();
         svc.Dispose();
+    }
+
+    // ============ 消息泵寿命判据（2026-10-13 16:16:55 事故） ============
+
+    [Fact]
+    public void PumpShouldReap_验证窗口可见_再不空闲也不退_一等公民()
+    {
+        // 反例中的反例：用户正在过 Cloudflare 验证（turnstile 可能看半天），
+        // 哪怕空闲计数爆表也绝不允许收线程——16:16 事故正是线程寿终时用户正在验证
+        var now = new DateTime(2026, 10, 13, 16, 30, 0, DateTimeKind.Utc);
+        var stale = now.AddHours(-2);
+        Assert.False(WebView2WikiFetcher.PumpShouldReap(now, stale, captchaWindowVisible: true, TimeSpan.FromMinutes(10)));
+    }
+
+    [Fact]
+    public void PumpShouldReap_窗口隐藏且未超时_不退()
+    {
+        var now = new DateTime(2026, 10, 13, 16, 30, 0, DateTimeKind.Utc);
+        var recent = now.AddMinutes(-9);
+        Assert.False(WebView2WikiFetcher.PumpShouldReap(now, recent, captchaWindowVisible: false, TimeSpan.FromMinutes(10)));
+    }
+
+    [Fact]
+    public void PumpShouldReap_窗口隐藏且超时_退()
+    {
+        var now = new DateTime(2026, 10, 13, 16, 30, 0, DateTimeKind.Utc);
+        var stale = now.AddMinutes(-10).AddSeconds(-1);
+        Assert.True(WebView2WikiFetcher.PumpShouldReap(now, stale, captchaWindowVisible: false, TimeSpan.FromMinutes(10)));
+    }
+
+    [Fact]
+    public void PumpShouldReap_边界恰好等于阈值_退()
+    {
+        // >= 边界含等号：恰好闲置满 10 分钟也算（省内存不该差这一秒）
+        var now = new DateTime(2026, 10, 13, 16, 30, 0, DateTimeKind.Utc);
+        var exactly = now.AddMinutes(-10);
+        Assert.True(WebView2WikiFetcher.PumpShouldReap(now, exactly, captchaWindowVisible: false, TimeSpan.FromMinutes(10)));
     }
 }
