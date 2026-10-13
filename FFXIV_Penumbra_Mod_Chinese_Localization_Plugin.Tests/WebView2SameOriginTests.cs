@@ -370,8 +370,15 @@ public class WebView2EmergencyArgsTests
     [Fact]
     public void BuildWebView2Args_默认_仅软件渲染()
     {
-        // 默认（关应急）：只强制软件渲染，绝不放松沙箱
-        Assert.Equal("--disable-gpu --disable-gpu-compositing", WebView2WikiFetcher.BuildWebView2Args(false));
+        var a = WebView2WikiFetcher.BuildWebView2Args(false);
+        // 默认（关应急）：软件渲染 + 防渲染冻结（2026-10-14 新增），绝不放松沙箱
+        Assert.Contains("--disable-gpu --disable-gpu-compositing", a);
+        Assert.Contains("--disable-features=CalculateNativeWinOcclusion", a);
+        Assert.Contains("--disable-backgrounding-occluded-windows", a);
+        Assert.Contains("--disable-renderer-backgrounding", a);
+        Assert.Contains("--disable-background-timer-throttling", a);
+        Assert.DoesNotContain("--no-sandbox", a);
+        Assert.DoesNotContain("RendererCodeIntegrity", a);
     }
 
     [Fact]
@@ -379,8 +386,11 @@ public class WebView2EmergencyArgsTests
     {
         var a = WebView2WikiFetcher.BuildWebView2Args(true);
         Assert.Contains("--no-sandbox", a);
-        Assert.Contains("--disable-features=RendererCodeIntegrity", a);
-        // 软件渲染仍保留
+        Assert.Contains("RendererCodeIntegrity", a); // 与 occlusion 并入同一条 --disable-features
+        // 只能有一条 --disable-features：Chromium 只认最后一个，写两条会让前者静默失效
+        Assert.Equal(1, a.Split("--disable-features=").Length - 1);
+        // 软件渲染与防冻结仍保留
         Assert.Contains("--disable-gpu --disable-gpu-compositing", a);
+        Assert.Contains("--disable-renderer-backgrounding", a);
     }
 }

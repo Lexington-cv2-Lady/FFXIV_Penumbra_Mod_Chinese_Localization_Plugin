@@ -335,6 +335,12 @@ internal sealed class WebView2WikiFetcher : IDisposable
                         error = new InvalidOperationException(text!.Substring("__WV2ERR__".Length));
                         break;
                     case Wv2FetchOutcome.SameOriginNeeded:
+                        // ★ 诊断（2026-10-14）：本分支把**三种成因混为一谈**——raw 为 null（脚本无返回/
+                        //   调用超时）、raw 为 "null"（Promise 未兑现）、raw 是非字符串 JSON 令牌。
+                        //   日志却一律写「跨源被拒」，长期把排查方向带偏（真身多半是 renderer 里 JS 没执行）。
+                        //   故先把原始返回值原样打出来，一眼可辨。
+                        _log.Warn("[wv2] fetch 原始返回值诊断：raw="
+                                  + (raw == null ? "(null)" : raw.Length == 0 ? "(空串)" : Truncate(raw, 200)));
                         // 返回值不是 JSON 字符串（典型为 null）：当前页（起手 about:blank 是不透明源）与 wiki
                         // 不同源，页内 fetch 被跨源策略拒，请求根本没到达服务器（2026-10-13 实测形态）。
                         // 解法：弹验证窗口先导航到 wiki 同源页（请司令官过 CF），之后重试即同源可取。
@@ -756,9 +762,27 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// （2026-10-14 选项 A 应急兜底；会放松 Chromium 沙箱，仅排障用，验证后应撤除环境变量）。
     /// </summary>
     internal static string BuildWebView2Args(bool emergency)
-        => emergency
-            ? "--disable-gpu --disable-gpu-compositing --no-sandbox --disable-features=RendererCodeIntegrity"
-            : "--disable-gpu --disable-gpu-compositing";
+    {
+        // 基线＝软件渲染（绕开游戏内 GPU 合成冲突）**＋ 防渲染冻结**。
+        // 后者 2026-10-14 新增，源于这样一组实测：游戏内 renderer 进程活着（CPU 0.3s）、
+        // 导航 IsSuccess=True，但 ExecuteScriptAsync 恒返回 null —— JS 根本没执行。
+        // 这正是「窗口被判为不可见/后台 → Chromium 冻结渲染与脚本」的典型形态，四参数逐条对症：
+        //   --disable-features=CalculateNativeWinOcclusion  不做原生窗口遮挡计算（游戏全屏时我们的窗口极易被判为被遮挡）
+        //   --disable-backgrounding-occluded-windows        被遮挡也不后台化
+        //   --disable-renderer-backgrounding                renderer 不进后台节流
+        //   --disable-background-timer-throttling           后台计时器不降频
+        var baseline = "--disable-gpu --disable-gpu-compositing"
+                     + " --disable-features=CalculateNativeWinOcclusion"
+                     + " --disable-backgrounding-occluded-windows"
+                     + " --disable-renderer-backgrounding"
+                     + " --disable-background-timer-throttling";
+        if (!emergency) return baseline;
+        // 应急（排障用）：并入同一条 --disable-features（Chromium 只认最后一个，不能写两条），再加 --no-sandbox
+        return baseline.Replace("--disable-features=CalculateNativeWinOcclusion",
+                                "--disable-features=CalculateNativeWinOcclusion,RendererCodeIntegrity",
+                                StringComparison.Ordinal)
+               + " --no-sandbox";
+    }
 
     private async Task InitWebView2Async()
     {
