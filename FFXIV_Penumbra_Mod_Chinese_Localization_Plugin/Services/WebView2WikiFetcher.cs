@@ -417,7 +417,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 SyncWebViewBounds();
                 _captchaPending = false; // 窗口已弹出，进入「用户操作中」；关闭时再清一次并通知 UI 续跑
                 _ctl!.CoreWebView2.Navigate(url);
-                // 监听：一旦导航到非挑战内容，视为验证通过
+                // 监听：一旦导航到非挑战内容，视为验证通过。
+                // 先减后加——18:01 实录：每次弹窗都重复 += 从不 -=，导航完成日志越叠越多（3/4/6…）
+                _ctl.CoreWebView2.NavigationCompleted -= OnCaptchaNavCompleted;
                 _ctl.CoreWebView2.NavigationCompleted += OnCaptchaNavCompleted;
             }
             catch (Exception ex)
@@ -453,6 +455,24 @@ internal sealed class WebView2WikiFetcher : IDisposable
         return CenterInWorkArea(0, 0, GetSystemMetrics(0), GetSystemMetrics(1), w, h);
     }
 
+    /// <summary>
+    /// 手动隐藏验证窗口（UI 逃生门）：白窗/窗口被全屏游戏挡住点不到 X 时，
+    /// 司令官可从插件界面点「隐藏验证窗口」把它收掉（与点 X 等效：隐藏不销毁 + 通知续跑）。
+    /// </summary>
+    public void HideCaptchaWindow()
+    {
+        if (_disposed) return;
+        _captchaWindowVisible = false;
+        TouchPumpActivity();
+        PumpQueue.Enqueue(() =>
+        {
+            try { if (_hwnd != IntPtr.Zero) ShowWindow(_hwnd, SW_HIDE); } catch { /* 已没 */ }
+        });
+        WakePump();
+        _captchaPending = false;
+        try { OnCaptchaWindowClosed?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
+    }
+
     /// <summary> 把 WebView2 显示区域同步为宿主窗口客户区（隐藏窗口上初始化的控制器不会自动合成画面，必须显式重设）。 </summary>
     private void SyncWebViewBounds()
     {
@@ -471,7 +491,10 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 进入「等待人工验证」状态并通知 UI 弹窗（每轮只通知一次；弹窗/关窗/取到数据时清状态）。 </summary>
     private void EnterCaptchaPending(string reason)
     {
-        if (_captchaPending) return;
+        // 验证窗口正显示着（用户还没处理完）→ 不重复通知、不重复弹窗：
+        // 2026-10-13 18:01 实录「弹窗风暴」——白窗无法完成验证 → 用户反复关窗 → 续跑 →
+        // 再撞墙 → 再弹窗，每秒一轮无限循环，日志被刷爆、导航完成事件重复订阅越叠越多。
+        if (_captchaPending || _captchaWindowVisible) return;
         _captchaPending = true;
         _log.Warn($"[wv2] {reason}——需要司令官手动过一次 Cloudflare 验证（将弹出验证窗口）");
         try { OnCaptchaNeeded?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
@@ -664,6 +687,29 @@ internal sealed class WebView2WikiFetcher : IDisposable
             _ctl.CoreWebView2.Navigate("about:blank");
             try { await blank.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
             catch { _log.Warn("[wv2] about:blank 就绪等待超时（仍尝试 fetch）"); }
+
+            // 渲染进程崩溃/被杀监听（白窗取证）：2026-10-13 18:01 实录验证窗口整片白、
+            // 进程组看着健康——不接这个事件永远不知道 renderer 是不是死了。
+            // 崩溃后自愈：关掉死控制器、就地重建（窗口与持久 profile 都在，cookie 不丢）。
+            _ctl.CoreWebView2.ProcessFailed += (_, a) =>
+            {
+                _log.Error($"[wv2] 渲染进程失败：{a.ProcessFailedKind}（{a.Reason}）——验证内容可能空白，尝试就地重建控制器");
+                PumpQueue.Enqueue(() =>
+                {
+                    try
+                    {
+                        _ctl?.Close();
+                        _ctl = null;
+                        _available = false;
+                        _ = InitWebView2Async(); // 窗口/类名/profile 俱在，直接重建
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Error($"[wv2] 重建控制器失败：{ex.GetType().Name} {Truncate(ex.Message, 100)}");
+                    }
+                });
+                WakePump();
+            };
 
             _available = true;
             _log.Info("[wv2] WebView2 直抓已就绪（真实浏览器指纹，CDN 应放行）");

@@ -215,6 +215,9 @@ public sealed class WikiExportService : IDisposable
     /// <summary> 弹出 WebView2 验证窗口，请司令官手动过一次 Cloudflare 验证（cookie 存入持久 profile，后续自动复用）。 </summary>
     public void ShowCaptcha(string url) => _wv2?.ShowCaptchaWindow(url);
 
+    /// <summary> 隐藏验证窗口（UI 逃生门：白窗/被全屏游戏挡住点不到 X 时从插件界面收起）。 </summary>
+    public void HideCaptchaWindow() => _wv2?.HideCaptchaWindow();
+
     /// <summary> WebView2（真实浏览器指纹）取数；未启用/未就绪/失败均返回 null，交回 curl 路径。 </summary>
     private Task<string?> FetchViaWebView2(string url, CancellationToken ct)
     {

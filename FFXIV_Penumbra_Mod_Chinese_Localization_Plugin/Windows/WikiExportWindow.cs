@@ -22,8 +22,10 @@ public class WikiExportWindow : Window, IDisposable
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
     private string? _captchaUrl;   // 待人工过验证的 wiki URL（撞 CF 时由 service 回填）
+    private string? _lastCaptchaUrl; // 最近一次待验证的 URL（「重新打开验证窗口」按钮用）
     private bool _captchaWindowClosed;   // 验证窗口已被用户关闭（fetcher 线程置位）
     private bool _awaitingCaptchaResume; // 上一轮因等待人工验证而暂停（-4），关窗后应自动续跑
+    private bool _captchaResumeUsed;     // 本轮提取会话的「关窗自动续跑」机会已用掉（一次性，防弹窗风暴）
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -150,10 +152,15 @@ public class WikiExportWindow : Window, IDisposable
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
                 if (n == -4)
                 {
-                    // 需要人工验证：标记待续跑；提示用户在验证窗口完成验证后关窗即自动继续
+                    // 需要人工验证：标记待续跑；提示用户在验证窗口完成验证后关窗即自动继续。
+                    // 但「关窗续跑」机会**一次性**：2026-10-13 18:01 实录弹窗风暴——
+                    // 白窗无法验证 → 用户反复关窗 → 续跑 → 再撞墙 → 再弹窗，每秒一轮无限循环。
+                    // 用掉机会后再撞墙，只提示、不再自动续跑/弹窗，由司令官手动决定下一步。
                     _awaitingCaptchaResume = true;
                     _result += (_result.Length > 0 ? "\n" : "")
-                               + "[提示] 已弹出验证窗口：请在窗口内完成 Cloudflare 验证，然后关闭验证窗口，插件会自动从断点继续提取。";
+                        + (_captchaResumeUsed
+                            ? "[提示] 验证仍未完成（断点已保存）。请在验证窗口内完成 Cloudflare 验证后点「重新打开验证窗口」或「开始提取」继续；自动续跑已停止，避免反复弹窗。"
+                            : "[提示] 已弹出验证窗口：请在窗口内完成 Cloudflare 验证，然后关闭验证窗口，插件会自动从断点继续提取。");
                 }
             }
             finally
@@ -169,17 +176,45 @@ public class WikiExportWindow : Window, IDisposable
         {
             var url = _captchaUrl;
             _captchaUrl = null;
+            _lastCaptchaUrl = url; // 记住：白窗/关不掉时「重新打开验证窗口」按钮要用
             _plugin.Wiki.ShowCaptcha(url);
             _result += (_result.Length > 0 ? "\n" : "")
                        + "[提示] 检测到 Cloudflare 验证，已弹出验证窗口：请在窗口内完成验证，插件会自动继续提取。";
         }
 
-        // 验证窗口关闭 → 自动从断点续跑（仅当上一轮是因等待人工验证而暂停的 -4）
-        if (_awaitingCaptchaResume && _captchaWindowClosed && (_task == null || _task.IsCompleted))
+        // 验证窗口关闭 → 自动从断点续跑（仅当上一轮是因等待人工验证而暂停的 -4，且机会未用掉）
+        if (_awaitingCaptchaResume && _captchaWindowClosed && !_captchaResumeUsed && (_task == null || _task.IsCompleted))
         {
             _awaitingCaptchaResume = false;
             _captchaWindowClosed = false;
+            _captchaResumeUsed = true; // 一次性：续跑若再撞墙，回到上面 -4 分支只提示不自动续跑
             StartExtract(dictDir, "[提示] 验证窗口已关闭，从断点继续提取…");
+        }
+
+        // 等待人工验证期间的手动操作区（白窗/窗口被游戏挡住点不到 X 时的逃生门）
+        if (_awaitingCaptchaResume)
+        {
+            ImGui.Separator();
+            if (ImGui.Button("重新打开验证窗口##CaptchaReopen"))
+            {
+                _captchaWindowClosed = false;
+                _plugin.Wiki.ShowCaptcha(_lastCaptchaUrl ?? "https://cdn.huijiwiki.com/ff14/api.php");
+                _result += "\n[提示] 已重新弹出验证窗口。";
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("隐藏验证窗口##CaptchaHide"))
+            {
+                _plugin.Wiki.HideCaptchaWindow();
+                _result += "\n[提示] 验证窗口已隐藏（WebView2 与 cookie 保留，可随时重新打开）。";
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("停止等待，手动重来##CaptchaStop"))
+            {
+                _awaitingCaptchaResume = false;
+                _captchaWindowClosed = false;
+                _captchaResumeUsed = false;
+                _result += "\n[提示] 已停止自动续跑；重新点「开始提取」即可（断点已保存）。";
+            }
         }
     }
 
@@ -198,9 +233,10 @@ public class WikiExportWindow : Window, IDisposable
     /// <summary> 按当前勾选启动提取。<paramref name="resumeNote"/> 非空时作为结果区首行（验证后自动续跑用）。 </summary>
     private void StartExtract(string dictDir, string? resumeNote = null)
     {
-        // 新的一轮（含验证后自动续跑）：清掉上一轮的验证等待状态
+        // 新的一轮（含验证后自动续跑）：清掉上一轮的验证等待状态与续跑机会（新一轮重新武装）
         _awaitingCaptchaResume = false;
         _captchaWindowClosed = false;
+        _captchaResumeUsed = false;
 
         var prefixes = new List<string>();
         if (_perCat)
