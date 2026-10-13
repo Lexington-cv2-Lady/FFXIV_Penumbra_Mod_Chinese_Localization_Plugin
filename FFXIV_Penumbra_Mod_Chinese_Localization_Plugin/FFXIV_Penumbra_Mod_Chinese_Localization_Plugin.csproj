@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.1.9.9</Version>
+    <Version>1.1.9.10</Version>
     <!-- 禁用 NuGet 漏洞审计：本机到 api.nuget.org 的链路被重置，审计失败会刷 NU1900 噪声警告（与代码无关） -->
     <NuGetAudit>false</NuGetAudit>
     <!-- 插件 ID（InternalName）= 程序集名，必须为 ASCII；显示名（Name）用中文。 -->
@@ -75,13 +75,31 @@
        ExecuteScriptAsync 恒返回 {}，防冻结参数亦无效）；同一引擎在游戏外 0.2 秒可取回真实 JSON。
        这也是 Browsingway 的做法（renderer 独立进程 + 离屏），故不受全屏/G-SYNC 影响。
        该 exe 由 tools\wv2_fetch_helper\wv2_fetch_helper.csproj 构建（需先构建它），缺失则跳过、静默回退老路。
-       注意：不要放在插件项目目录内——SDK 默认会把子目录的 .cs 一并编译进插件，造成类型冲突。 -->
+       注意：不要放在插件项目目录内——SDK 默认会把子目录的 .cs 一并编译进插件，造成类型冲突。
+
+       ★ 2026-10-14 教训（为此白查两轮）：**绝不能只复制 exe**。.NET 的 exe 只是 apphost（原生启动器），
+       真正的托管应用在同名 `wv2_fetch_helper.dll`，另外还需要 `wv2_fetch_helper.runtimeconfig.json`
+       / `wv2_fetch_helper.deps.json` / `Microsoft.Web.WebView2.Core.dll` / `runtimes\win-x64\native\WebView2Loader.dll`。
+       只放 exe 会当场失败：exit=0x8000809A，stderr=「The application to execute does not exist: '…wv2_fetch_helper.dll'」。
+       故改为**整目录递归复制到 $(TargetDir)wv2_fetch_helper\**（自成一格，不与插件自身依赖混放）。 -->
   <Target Name="CopyFetchHelper" AfterTargets="Build" BeforeTargets="DeployToDev">
     <ItemGroup>
-      <_FetchHelper Include="..\tools\wv2_fetch_helper\bin\Release\net10.0-windows7.0\wv2_fetch_helper.exe"
-                    Condition="Exists('..\tools\wv2_fetch_helper\bin\Release\net10.0-windows7.0\wv2_fetch_helper.exe')" />
+      <_FetchHelper Include="..\tools\wv2_fetch_helper\bin\Release\net10.0-windows7.0\**\*"
+                    Exclude="..\tools\wv2_fetch_helper\bin\Release\net10.0-windows7.0\**\*.pdb;..\tools\wv2_fetch_helper\bin\Release\net10.0-windows7.0\**\*.xml" />
     </ItemGroup>
-    <Copy SourceFiles="@(_FetchHelper)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_FetchHelper)"
+          DestinationFiles="@(_FetchHelper->'$(TargetDir)wv2_fetch_helper\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <!-- WebView2 的原生 loader 也要进 helper 目录：缺了它 Core.dll 的 DllImport 解析不到，
+         helper 会在创建 WebView2 环境时炸掉。这里**平铺**放进 wv2_fetch_helper\ 而不是
+         runtimes\win-x64\native\——实测 DeployToDev 的 `$(TargetDir)*\*` 只覆盖一层，
+         三层深的 runtimes 树不会跟着走（插件根目录那份平铺的 loader 正是这个原因）；
+         而 .NET 的原生库搜索路径本身就含应用目录，平铺即可命中。 -->
+    <ItemGroup>
+      <_FetchHelperNative Include="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2792.45\runtimes\win-x64\native\WebView2Loader.dll"
+                          Condition="Exists('$(NuGetPackageRoot)microsoft.web.webview2\1.0.2792.45\runtimes\win-x64\native\WebView2Loader.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_FetchHelperNative)" DestinationFolder="$(TargetDir)wv2_fetch_helper" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- DependsOn 打包器：DalamudPackager 的 targets 在 SDK 末尾导入、晚于本文件执行；

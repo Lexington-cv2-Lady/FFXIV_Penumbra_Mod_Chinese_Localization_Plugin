@@ -187,35 +187,87 @@ public sealed class WikiExportService : IDisposable
     private static bool _helperLogged;
 
     /// <summary>
+    /// 在给定目录里定位可用的外部抓取器 exe；找不到或不完整时返回 null。
+    /// <para>
+    /// ★ 2026-10-14 第二轮教训：**exe 存在 ≠ 可启动**。.NET 的 exe 只是 apphost（原生启动器），
+    /// 它转头就去加载同名托管 dll；只部署了 exe 时会以 exit=0x8000809A 失败，
+    /// stderr 明写「The application to execute does not exist: '…wv2_fetch_helper.dll'」。
+    /// 因此这里**必须连带校验托管 dll 在场**，否则又会像上一版那样「找到了却还是跑不起来」。
+    /// </para>
+    /// 布局优先级：独立子目录 <c>wv2_fetch_helper\</c>（自成一格，推荐）→ 插件根目录平铺（旧布局）。
+    /// </summary>
+    internal static string? LocateHelperIn(string dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return null;
+        try
+        {
+            var sub = Path.Combine(dir, "wv2_fetch_helper");
+            if (File.Exists(Path.Combine(sub, "wv2_fetch_helper.exe"))
+                && File.Exists(Path.Combine(sub, "wv2_fetch_helper.dll")))
+                return Path.Combine(sub, "wv2_fetch_helper.exe");
+
+            if (File.Exists(Path.Combine(dir, "wv2_fetch_helper.exe"))
+                && File.Exists(Path.Combine(dir, "wv2_fetch_helper.dll")))
+                return Path.Combine(dir, "wv2_fetch_helper.exe");
+        }
+        catch { /* 路径非法，视作未部署 */ }
+        return null;
+    }
+
+    /// <summary>
+    /// 目录里**摆着 exe 却凑不齐一套**（缺同名托管 dll）——部署不完整，apphost 必然启动失败，用于日志定性。
+    /// 只在本目录定位不到可用抓取器（<see cref="LocateHelperIn"/> 返回 null）时才可能为真，
+    /// 好把「部署漏文件」与「压根没部署」区分开，避免排查方向被带偏。
+    /// </summary>
+    internal static bool HelperDeployIncomplete(string dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return false;
+        if (LocateHelperIn(dir) != null) return false; // 已能定位＝部署完整，谈不上残缺
+        try
+        {
+            return File.Exists(Path.Combine(dir, "wv2_fetch_helper", "wv2_fetch_helper.exe"))
+                   || File.Exists(Path.Combine(dir, "wv2_fetch_helper.exe"));
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// 外部抓取器 exe 的随插件路径；未随插件发布时为 null（静默回退，不影响既有链路）。
-    /// 2026-10-14 教训：只认 `Assembly.Location` 一个目录不够——Dalamud 的装配位置未必等于
-    /// 部署目录，首版因此「exe 明明在 devPlugins、却从没被调用过」，且因无日志而查不出来。
-    /// 故改为多候选依次探测。
+    /// 2026-10-14 教训：① 只认 `Assembly.Location` 一个目录不够——Dalamud 的装配位置未必等于
+    /// 部署目录，首版因此「exe 明明在 devPlugins、却从没被调用过」，且因无日志而查不出来；
+    /// ② 找到 exe 也不算数，还得有同名托管 dll，否则 apphost 起不来。
+    /// 故改为多候选依次探测 + 完整性校验。
     /// </summary>
     internal static string? ExternalHelperPath
     {
         get
         {
-            var cands = new List<string>();
-            try
+            foreach (var d in HelperSearchDirs())
             {
-                var d1 = Path.GetDirectoryName(typeof(WikiExportService).Assembly.Location);
-                if (!string.IsNullOrEmpty(d1)) cands.Add(d1);
-            }
-            catch { /* 忽略 */ }
-            try { cands.Add(AppContext.BaseDirectory); } catch { /* 忽略 */ }
-            if (!string.IsNullOrEmpty(s_pluginDir)) cands.Add(s_pluginDir); // Dalamud 给的真实插件目录（最可靠）
-            foreach (var d in cands)
-            {
-                try
-                {
-                    var p = Path.Combine(d, "wv2_fetch_helper.exe");
-                    if (File.Exists(p)) return p;
-                }
-                catch { /* 忽略 */ }
+                var p = LocateHelperIn(d);
+                if (p != null) return p;
             }
             return null;
         }
+    }
+
+    /// <summary>
+    /// 抓取器的候选目录（顺序即优先级）。Dalamud 常以**字节流**加载插件，此时 `Assembly.Location`
+    /// 为空、`AppContext.BaseDirectory` 是游戏目录，只有 Dalamud 给的 `AssemblyLocation` 才指向真实
+    /// 部署目录——故三个都要试，不许只认一个（首版就栽在这）。
+    /// </summary>
+    internal static List<string> HelperSearchDirs()
+    {
+        var cands = new List<string>();
+        try
+        {
+            var d1 = Path.GetDirectoryName(typeof(WikiExportService).Assembly.Location);
+            if (!string.IsNullOrEmpty(d1)) cands.Add(d1);
+        }
+        catch { /* 忽略 */ }
+        try { cands.Add(AppContext.BaseDirectory); } catch { /* 忽略 */ }
+        if (!string.IsNullOrEmpty(s_pluginDir)) cands.Add(s_pluginDir); // Dalamud 给的真实插件目录（最可靠）
+        return cands;
     }
 
     /// <summary>
@@ -235,7 +287,11 @@ public sealed class WikiExportService : IDisposable
             if (!_helperLogged)
             {
                 _helperLogged = true;
-                _log.Warn("[wv2] 未找到外部抓取器 wv2_fetch_helper.exe（未随插件发布）——抓取仍走内嵌 WebView2/curl 老路");
+                var incomplete = HelperSearchDirs().Exists(HelperDeployIncomplete);
+                _log.Warn(incomplete
+                    ? "[wv2] 外部抓取器部署不完整（只有 wv2_fetch_helper.exe，缺同名托管 dll / runtimeconfig.json）——"
+                      + "apphost 无法启动，抓取仍走内嵌 WebView2/curl 老路"
+                    : "[wv2] 未找到外部抓取器 wv2_fetch_helper.exe（未随插件发布）——抓取仍走内嵌 WebView2/curl 老路");
             }
             return null;
         }
@@ -277,8 +333,14 @@ public sealed class WikiExportService : IDisposable
             var errText = await readErr.ConfigureAwait(false);
             if (p.ExitCode != 0 || !File.Exists(outFile))
             {
+                // 0x8000809A（-2147450726）＝ apphost 找不到托管应用；配套 stderr「does not exist: '….dll'」。
+                // 见到这句就等于「部署漏文件」，不必再往 Cloudflare / 指纹方向查。
+                var hint = errText.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? "；提示：exe 只是 .NET 原生启动器，必须连同同名 .dll 与 .runtimeconfig.json 一起部署"
+                    : "";
                 _log.Warn($"[wv2] 外部抓取器未取得结果（exit={p.ExitCode}，outFile 存在={File.Exists(outFile)}）"
                           + (errText.Length > 0 ? "；stderr=" + errText.Substring(0, Math.Min(200, errText.Length)) : "")
+                          + hint
                           + "——回退内嵌 WebView2");
                 return null;
             }
