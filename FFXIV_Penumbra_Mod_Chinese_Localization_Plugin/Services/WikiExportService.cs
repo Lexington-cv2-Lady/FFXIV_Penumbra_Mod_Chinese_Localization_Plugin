@@ -18,7 +18,7 @@ namespace FFXIVPenumbraHanhua.Services;
 /// 按分类写入 词典目录\wiki_术语对照\&lt;分类&gt;.json（分类提取）或 汇总.json（汇总提取）。
 /// 语义与独立版一致：增量更新（已有词条不覆盖）、黑名单过滤、噪音词拒绝、Race 固定词表并入、空分类跳过。
 /// </summary>
-public sealed class WikiExportService
+public sealed class WikiExportService : IDisposable
 {
     /// <summary> 可选分类（Display 用于界面与中文文件名；Prefix 带尾斜杠用于 Data namespace）。 </summary>
     public sealed record WikiCategory(string Display, string Prefix);
@@ -84,6 +84,19 @@ public sealed class WikiExportService
             _wv2.Start(); // 独立线程异步初始化；未就绪/失败自动回退 curl 路径
             _wv2.OnCaptchaWindowClosed = () => OnCaptchaWindowClosed?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// 释放抓取资源（插件卸载/热重载时由 <see cref="Plugin"/> 调用）。
+    /// 2026-10-13 14:16 实测教训：卸载链若漏放 WebView2 抓取器，僵尸控制器会滞留
+    /// msedgewebview2 进程并拖住<b>共享</b>浏览器进程，新实例 fetch 卡死 30s——
+    /// 故卸载必须显式关闭 fetcher（STA 线程、控制器、隐藏窗口、看门狗一并收）。
+    /// 调用方需保证先取消进行中的提取（<see cref="WikiExportWindow.Dispose"/> 已做）。
+    /// </summary>
+    public void Dispose()
+    {
+        try { _wv2?.Dispose(); } catch { /* 卸载路径不因清理异常而中断 */ }
+        try { _http?.Dispose(); } catch { /* 同上 */ }
     }
 
     /// <summary>

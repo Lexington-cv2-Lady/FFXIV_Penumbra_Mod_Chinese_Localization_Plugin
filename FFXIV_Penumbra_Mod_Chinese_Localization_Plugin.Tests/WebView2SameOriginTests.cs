@@ -131,3 +131,75 @@ public class WebView2WindowClassNameTests
         Assert.All(suffix, c => Assert.True(char.IsAsciiHexDigit(c), $"Guid 段含非十六进制字符：{c}"));
     }
 }
+
+/// <summary>
+/// 回归测试：fetch 僵死时的「失能」机制（2026-10-13 14:16 实测事故）。
+/// 背景：卸载链漏放 WebView2 抓取器 → 僵尸控制器滞留 msedgewebview2 进程并拖住<b>共享</b>
+/// 浏览器进程 → 新实例 <c>ExecuteScriptAsync</c> 永不返回，每次提取白等 30s。
+/// 修复：① 超时/控制器异常即 <see cref="WebView2WikiFetcher.MarkUnavailable"/> 置失能，
+/// 后续请求直接回退 curl；② <see cref="WikiExportService"/> 实现 IDisposable，
+/// <see cref="Plugin"/> 卸载链显式关闭 fetcher。本文件锁住①的判据与②的释放契约。
+/// </summary>
+public class WebView2FetchUnavailableTests
+{
+    private static WebView2WikiFetcher NewFetcher()
+    {
+        // 不调用 Start()：只测字段级逻辑，不真起 STA 线程/WebView2 环境
+        return new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+    }
+
+    [Fact]
+    public void MarkUnavailable_置失能并记录原因()
+    {
+        var f = NewFetcher();
+        f.MarkUnavailable("fetch 等待超时（30s）");
+        Assert.False(f.IsAvailable);
+        Assert.Equal("fetch 等待超时（30s）", f.LastError);
+    }
+
+    [Fact]
+    public void MarkUnavailable_同原因幂等_异原因更新()
+    {
+        var f = NewFetcher();
+        f.MarkUnavailable("fetch 等待超时（30s）");
+        f.MarkUnavailable("fetch 等待超时（30s）"); // 同原因：幂等，不刷日志
+        Assert.Equal("fetch 等待超时（30s）", f.LastError);
+        f.MarkUnavailable("fetch 调用失败（COMException）"); // 异原因：更新，便于诊断
+        Assert.Equal("fetch 调用失败（COMException）", f.LastError);
+        Assert.False(f.IsAvailable);
+    }
+
+    [Fact]
+    public void MarkUnavailable_不清除CaptchaPending_两状态相互独立()
+    {
+        // 反例：失能是「抓取器坏了」，等待人工验证是「需要用户操作」——不能互相顶掉。
+        // CaptchaPending 无公开置位入口，此处锁「失能不会误碰它」
+        var f = NewFetcher();
+        f.MarkUnavailable("fetch 等待超时（30s）");
+        Assert.False(f.CaptchaPending);
+    }
+
+    [Fact]
+    public void Dispose_未启动的fetcher_不抛异常()
+    {
+        var f = NewFetcher();
+        f.MarkUnavailable("测试");
+        f.Dispose(); // _ctl/_hwnd/_watchdog 均为 null，应静默收尾
+        Assert.False(f.IsAvailable);
+    }
+
+    [Fact]
+    public void Service_Dispose_未启用WebView2_不抛异常()
+    {
+        using var svc = new WikiExportService(new AppLog()); // 默认不启用 wv2，只走 HttpClient 释放
+        svc.Dispose();
+    }
+
+    [Fact]
+    public void Service_重复Dispose_幂等不抛()
+    {
+        var svc = new WikiExportService(new AppLog());
+        svc.Dispose();
+        svc.Dispose();
+    }
+}

@@ -630,6 +630,10 @@ public sealed class Plugin : IDalamudPlugin
         AiSettingsWindow.Dispose();
         AiConfigWindow.Dispose();
         WikiExportWindow.Dispose();
+        // 卸载链补释放 wiki 抓取资源（2026-10-13 14:16 实测教训：漏放 WebView2 抓取器 →
+        // 僵尸控制器滞留 msedgewebview2 进程、拖住共享浏览器进程，新实例 fetch 卡死 30s）。
+        // 顺序：先停 UI 抓取任务（上一行取消进行中的提取），再关 fetcher。
+        Wiki.Dispose();
         LogWindow.Dispose();
         FileListWindow.Dispose();
         OptionEditWindow.Dispose();

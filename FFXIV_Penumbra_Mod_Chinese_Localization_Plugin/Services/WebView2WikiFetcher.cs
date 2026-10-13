@@ -88,6 +88,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private const uint WM_APP_PUMP = WM_APP + 1;
     private const uint WM_CLOSE = 0x0010;
     private const uint WM_SIZE = 0x0005;
+    private const uint WM_QUIT = 0x0012;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int SW_SHOW = 5;
     private const int SW_HIDE = 0;
@@ -124,6 +125,22 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
     public bool IsAvailable => _available;
     public string? LastError => _lastError;
+
+    /// <summary>
+    /// 把抓取器标记为不可用（失能）：后续请求直接回退 curl，不再每页白等 30 秒。
+    /// 典型场景：WebView2 控制器僵死（僵尸实例拖住共享浏览器进程，2026-10-13 14:16 实测
+    /// fetch 卡死 30s）——此时等待毫无意义，失能后 <see cref="IsAvailable"/> 为 false，
+    /// 调用方立即走 curl 路径，整个提取不再被单点拖垮。幂等：重复标记不刷日志。
+    /// </summary>
+    internal void MarkUnavailable(string reason)
+    {
+        if (!_available && _lastError == reason) return;
+        var was = _available;
+        _available = false;
+        _lastError = reason;
+        if (was)
+            _log.Error($"[wv2] {reason}——WebView2 已标记不可用，后续抓取回退 curl；重新加载插件可恢复直抓");
+    }
 
     /// <summary>
     /// 用户数据目录（WebView2 profile）。<b>必须是持久目录</b>：cf_clearance 等 cookie 存在 profile 里，
@@ -239,10 +256,19 @@ internal sealed class WebView2WikiFetcher : IDisposable
         // 在本线程等结果（最多 30s），不占用 WebView2 线程
         if (!done.Wait(TimeSpan.FromSeconds(30), ct))
         {
-            _log.Warn("[wv2] fetch 等待超时（30s）");
+            if (ct.IsCancellationRequested) return null; // 取消：正常收尾，不判失能
+            // 超时多半意味着 WebView2 控制器已僵死（2026-10-13 14:16 实测：僵尸实例拖住共享
+            // 浏览器进程，ExecuteScriptAsync 永不返回）——置失能，后续请求直接回退 curl，
+            // 不再每页白等 30s。
+            MarkUnavailable("fetch 等待超时（30s）");
             return null;
         }
-        if (error != null) return null;
+        if (error != null)
+        {
+            // 控制器层面调用失败（COM/RPC 错误等）同样判失能：单页网络问题不会走这里
+            MarkUnavailable($"fetch 调用失败（{error.GetType().Name}）");
+            return null;
+        }
         return result;
     }
 
@@ -498,7 +524,18 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _disposed = true;
         _watchdog?.Dispose();
         try { _ctl?.Close(); } catch { /* 已释放/未创建 */ }
-        try { if (_hwnd != IntPtr.Zero) { DestroyWindow(_hwnd); _hwnd = IntPtr.Zero; } } catch { /* 忽略 */ }
+        try
+        {
+            if (_hwnd != IntPtr.Zero)
+            {
+                // WM_QUIT 让阻塞在 GetMessage 的消息泵立刻返回（0）退出，
+                // 不必干等 Pump 的 300 秒自然到期（热重载时 STA 线程早退一分钟是一分钟）。
+                PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+                DestroyWindow(_hwnd);
+                _hwnd = IntPtr.Zero;
+            }
+        }
+        catch { /* 忽略 */ }
         _available = false;
     }
 
