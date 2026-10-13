@@ -234,6 +234,11 @@ public sealed class WikiExportService : IDisposable
     /// <summary> 隐藏验证窗口（UI 逃生门：白窗/被全屏游戏挡住点不到 X 时从插件界面收起）。 </summary>
     public void HideCaptchaWindow() => _wv2?.HideCaptchaWindow();
 
+    /// <summary> B 路径：导入 cf_clearance cookie 到持久 profile（绕开游戏内验证窗）。 </summary>
+    public Task<string> ImportCfClearanceAsync(string raw)
+        => _wv2 != null ? _wv2.ImportCfClearanceAsync(raw)
+            : Task.FromResult("WebView2 抓取器未初始化（请确认已启用 WebView2 抓取且本机装有 Runtime）。");
+
     /// <summary> WebView2（真实浏览器指纹）取数；未启用/未就绪/失败均返回 null，交回 curl 路径。 </summary>
     private Task<string?> FetchViaWebView2(string url, CancellationToken ct)
     {

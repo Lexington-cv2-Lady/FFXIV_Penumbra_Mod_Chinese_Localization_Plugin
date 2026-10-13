@@ -26,6 +26,8 @@ public class WikiExportWindow : Window, IDisposable
     private bool _captchaWindowClosed;   // 验证窗口已被用户关闭（fetcher 线程置位）
     private bool _awaitingCaptchaResume; // 上一轮因等待人工验证而暂停（-4），关窗后应自动续跑
     private bool _captchaResumeUsed;     // 本轮提取会话的「关窗自动续跑」机会已用掉（一次性，防弹窗风暴）
+    private string _cfInput = "";         // B 路径：粘贴的 cf_clearance 值
+    private string? _cfImportMsg;         // 导入结果（异步回写，下帧 append 到 _result）
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -77,6 +79,31 @@ public class WikiExportWindow : Window, IDisposable
         else
         {
             Ui.Hint($"本机 WebView2 Runtime：{wv2Ver}");
+        }
+        ImGui.Spacing();
+
+        // B 路径：绕开游戏内验证窗（火绒等拦渲染导致白窗时尤其有用）。
+        // 思路参考 PCL 启动器「获取微软账号授权 → 开外部浏览器窗口」：认证交给真浏览器去做，
+        // 绝不在游戏内硬嵌一个渲染不出来的 WebView2。
+        Ui.Hint("绕开游戏内验证窗（B 路径）：点「在浏览器中打开验证页」用真浏览器过完 Cloudflare，再从开发者工具复制 cf_clearance 的值粘贴下方导入——插件写入持久 profile，之后游戏内不再弹验证窗（自然无白窗）。");
+        ImGui.SetNextItemWidth(Math.Max(200f, ImGui.GetContentRegionAvail().X - 300f));
+        ImGui.InputText("##CfClearance", ref _cfInput, 1024);
+        ImGui.SameLine();
+        if (ImGui.Button("导入 cf_clearance##CfImport"))
+        {
+            var input = _cfInput;
+            _ = _plugin.Wiki.ImportCfClearanceAsync(input).ContinueWith(t =>
+            {
+                try { _cfImportMsg = t.GetAwaiter().GetResult(); }
+                catch (Exception ex) { _cfImportMsg = "导入异常：" + ex.Message; }
+            }, TaskScheduler.Default);
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("在浏览器中打开验证页##CfOpenBrowser"))
+        {
+            OpenUrl("https://ff14.huijiwiki.com/");
+            _result += (_result.Length > 0 ? "\n" : "")
+                       + "[提示] 已用默认浏览器打开 wiki；请在该浏览器完成 Cloudflare 验证，再回来粘贴并导入 cf_clearance。";
         }
         ImGui.Spacing();
 
@@ -163,6 +190,14 @@ public class WikiExportWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
+
+        // B 路径导入结果回写（异步拿到的状态串，下一帧并入结果区——避免在 Draw 里 await 卡住界面）
+        if (_cfImportMsg != null)
+        {
+            var m = _cfImportMsg;
+            _cfImportMsg = null;
+            _result += (_result.Length > 0 ? "\n" : "") + "[导入] " + m;
+        }
 
         // 日志结果区
         var boxH = Math.Min(200f, Math.Max(100f, ImGui.GetContentRegionAvail().Y));

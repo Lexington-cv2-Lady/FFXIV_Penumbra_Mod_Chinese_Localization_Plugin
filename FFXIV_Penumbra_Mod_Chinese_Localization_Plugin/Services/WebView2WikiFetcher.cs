@@ -554,6 +554,76 @@ internal sealed class WebView2WikiFetcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// 解析用户粘贴的 cf_clearance cookie 值（纯函数，可单测）。
+    /// 接受三种形态：① 纯值（直接当作值）；② <c>cf_clearance=VALUE</c>；③ 带引号的值。
+    /// 解析出的值已去首尾空白/引号；空则 false。
+    /// </summary>
+    internal static bool TryParseCfClearance(string? raw, out string value)
+    {
+        value = "";
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var s = raw!.Trim();
+        if (s.StartsWith("cf_clearance=", StringComparison.OrdinalIgnoreCase))
+            s = s.Substring("cf_clearance=".Length).Trim();
+        if (s.Length >= 2 && s.StartsWith("\"") && s.EndsWith("\""))
+            s = s.Substring(1, s.Length - 2).Trim();
+        if (s.Length == 0) return false;
+        value = s;
+        return true;
+    }
+
+    /// <summary>
+    /// 手动导入 cf_clearance cookie（B 路径：绕开游戏内验证窗）。
+    /// 在司令官自己的浏览器里过完 Cloudflare 后，把 cf_clearance 的值粘贴进来，本方法把它写入
+    /// WebView2 持久 profile 的 CookieManager——之后游戏内抓取自动带上，不再弹可见验证窗（自然无白窗）。
+    /// <para>关键：cookie 注入发生在 WebView2 核心层（浏览器进程），<b>不依赖渲染进程绘制</b>，
+    /// 故即使游戏内验证窗白屏（渲染被拦），本导入仍可成功。</para>
+    /// 立即返回状态串（注入成功/失败/未就绪），由 UI 显示。
+    /// </summary>
+    public Task<string> ImportCfClearanceAsync(string raw)
+    {
+        if (!TryParseCfClearance(raw, out var value))
+            return Task.FromResult("无法解析 cf_clearance：请粘贴 cookie 的值（形如 cf_clearance=xxxx 或直接粘贴 xxxx）。");
+        EnsureThread(); // 空闲自退后的懒重启（线程死才重起）
+        if (_disposed) return Task.FromResult("WebView2 抓取器已释放（插件正在卸载？）。");
+        // 等就绪（最多 20s，同 Fetch 的就绪等待）
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!_disposed && DateTime.UtcNow < deadline)
+        {
+            if (_available && _ctl != null) break;
+            Thread.Sleep(200);
+        }
+        if (_disposed || !_available || _ctl == null)
+            return Task.FromResult("WebView2 未就绪，无法注入 cookie（将回退 curl）；请稍后重试或重载插件后再导入。");
+        using var done = new ManualResetEventSlim(false);
+        string status = "未知错误";
+        PumpQueue.Enqueue(() =>
+        {
+            try
+            {
+                var cookie = _ctl!.CoreWebView2.CookieManager.CreateCookie("cf_clearance", value, ".huijiwiki.com", "/");
+                cookie.IsSecure = true;
+                cookie.IsHttpOnly = true;
+                // SameSite 不显式设置：本 SDK 版本未公开同名枚举（实测 CoreWebView2CookieSameSite 编译不过），
+                // 保留默认的 Lax 即可——我们的请求是同站（huijiwiki.com → cdn.huijiwiki.com），Lax 下 cookie 正常携带。
+                cookie.Expires = DateTime.UtcNow.AddDays(30); // Expires 是 DateTime（非 DateTimeOffset，实测）
+                _ctl.CoreWebView2.CookieManager.AddOrUpdateCookie(cookie);
+                _log.Info("[wv2] 已手动导入 cf_clearance cookie 到持久 profile（domain=.huijiwiki.com，30 天有效）");
+                status = "已导入 cf_clearance（domain=.huijiwiki.com，30 天有效），已写入持久 profile。之后游戏内抓取将自动复用，不再弹验证窗；若仍提示验证，请先点一次「开始提取」触发同源导航。";
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"[wv2] 导入 cf_clearance 失败：{ex.GetType().Name} {Truncate(ex.Message, 150)}");
+                status = $"导入失败：{ex.GetType().Name} {Truncate(ex.Message, 120)}";
+            }
+            finally { done.Set(); }
+        });
+        WakePump();
+        done.Wait(TimeSpan.FromSeconds(15));
+        return Task.FromResult(status);
+    }
+
     private void OnCaptchaNavCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
         try
