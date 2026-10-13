@@ -216,6 +216,35 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.EndChild();
     }
 
+    /// <summary>
+    /// 日志区自动跟随「最新」（2026-10-14 用户反馈「日志窗口都被默认置顶，无法自由翻动」后统一收口）。
+    /// <para>
+    /// 关键：**只在用户已停在「新端」时才跟随**——列表 新→旧 时新端是顶部，旧→新 时新端是底部。
+    /// 旧写法是「每帧无条件滚到新端」，用户一往上/下翻就被强行拽回，等于没法看历史；
+    /// 现在只要用户离开新端就彻底不碰滚动条，可自由翻阅，回到底/顶部后自动恢复跟随。
+    /// </para>
+    /// 调用前需已在目标 Child 内，且已完成该 Child 的内容绘制。
+    /// </summary>
+    /// <param name="enabled">总开关（对应界面上的「自动滚动」勾选；关掉则完全不自动滚动）。</param>
+    /// <param name="newestAtTop">列表是否最新在上（新→旧）。false 表示最新在下（旧→新）。</param>
+    internal static void FollowNewest(bool enabled, bool newestAtTop)
+    {
+        if (!enabled) return;
+        var maxY = ImGui.GetScrollMaxY();
+        if (maxY <= 0f) return; // 没得滚，不必动
+        var y = ImGui.GetScrollY();
+        if (newestAtTop)
+        {
+            if (y > 1.0f) return;      // 用户已在翻历史，不打扰
+            ImGui.SetScrollY(0f);      // 新→旧：顶部即最新
+        }
+        else
+        {
+            if (y < maxY - 1.0f) return; // 用户已在翻历史，不打扰
+            ImGui.SetScrollHereY(1.0f);  // 旧→新：最后一项即最新
+        }
+    }
+
     /// <summary> 统一绘制：给所有窗口加明显边框（窗口边框 + 内部 Child 边框统一），再绘制窗口系统。 </summary>
     private void DrawAll()
     {

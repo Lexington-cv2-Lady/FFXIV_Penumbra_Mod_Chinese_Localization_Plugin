@@ -28,6 +28,7 @@ public class WikiExportWindow : Window, IDisposable
     private bool _captchaResumeUsed;     // 本轮提取会话的「关窗自动续跑」机会已用掉（一次性，防弹窗风暴）
     private string _cfInput = "";         // B 路径：粘贴的 cf_clearance 值
     private string? _cfImportMsg;         // 导入结果（异步回写，下帧 append 到 _result）
+    private bool _followLog = true;       // 提取日志「跟随最新」；取消勾选后可自由翻阅历史，滚动条不再被拽回
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
     {
@@ -40,7 +41,7 @@ public class WikiExportWindow : Window, IDisposable
         };
         _plugin = plugin;
         _wiki = plugin.Wiki;
-        // 撞 Cloudflare 验证时：弹 WebView2 验证窗口，请司令官点一次；cookie 存进持久 profile 后自动复用
+        // 撞 Cloudflare 验证时：弹 WebView2 验证窗口，请点一次；cookie 存进持久 profile 后自动复用
         _wiki.OnCaptchaNeeded = url => _captchaUrl = url;
         // 验证窗口被关闭：标记置位，Draw 里据此从断点自动续跑
         _wiki.OnCaptchaWindowClosed = () => _captchaWindowClosed = true;
@@ -103,7 +104,7 @@ public class WikiExportWindow : Window, IDisposable
         if (ImGui.Button("在浏览器中打开抓取端点##CfOpenBrowser"))
         {
             // 必须开「带全部参数的真实抓取端点」：裸 api.php 只会返回 MediaWiki 的 API 帮助页，
-            // 根本看不出 CF 拦没拦（2026-10-14 司令官实测「打开的是正常网站，又绕回来了」的真因）。
+            // 根本看不出 CF 拦没拦（2026-10-14 实测「打开的是正常网站，又绕回来了」的真因）。
             OpenUrl(WikiExportService.ApiEndpoint);
             _result += (_result.Length > 0 ? "\n" : "")
                        + "[提示] 已用默认浏览器打开插件实际抓取的端点。2026-10-14 实测：真实浏览器引擎访问它"
@@ -204,9 +205,11 @@ public class WikiExportWindow : Window, IDisposable
             _result += (_result.Length > 0 ? "\n" : "") + "[导入] " + m;
         }
 
-        // 日志结果区
+        // 日志结果区（取消「跟随最新」即可自由翻阅，滚动条不再被拽到底部）
+        ImGui.Checkbox("跟随最新", ref _followLog);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("勾选时只在已停在底部才自动滚动；取消勾选后完全不自动滚动，可自由翻看历史");
         var boxH = Math.Min(200f, Math.Max(100f, ImGui.GetContentRegionAvail().Y));
-        Plugin.ResultBox("##WikiResult", _result, "提取日志将显示在这里（进度 / 新增 / 命中已有 / 拒绝数…）", boxH, true);
+        Plugin.ResultBox("##WikiResult", _result, "提取日志将显示在这里（进度 / 新增 / 命中已有 / 拒绝数…）", boxH, _followLog);
 
         // 轮询任务完成
         if (_task != null && _task.IsCompleted)
@@ -221,7 +224,7 @@ public class WikiExportWindow : Window, IDisposable
                     // 需要人工验证：标记待续跑；提示用户在验证窗口完成验证后关窗即自动继续。
                     // 但「关窗续跑」机会**一次性**：2026-10-13 18:01 实录弹窗风暴——
                     // 白窗无法验证 → 用户反复关窗 → 续跑 → 再撞墙 → 再弹窗，每秒一轮无限循环。
-                    // 用掉机会后再撞墙，只提示、不再自动续跑/弹窗，由司令官手动决定下一步。
+                    // 用掉机会后再撞墙，只提示、不再自动续跑/弹窗，由用户手动决定下一步。
                     _awaitingCaptchaResume = true;
                     _result += (_result.Length > 0 ? "\n" : "")
                         + (_captchaResumeUsed
@@ -237,7 +240,7 @@ public class WikiExportWindow : Window, IDisposable
             }
         }
 
-        // 撞 Cloudflare 验证：弹 WebView2 验证窗口，请司令官点一次；cookie 存进持久 profile 后下次自动复用
+        // 撞 Cloudflare 验证：弹 WebView2 验证窗口，请点一次；cookie 存进持久 profile 后下次自动复用
         if (_captchaUrl != null)
         {
             var url = _captchaUrl;

@@ -131,10 +131,10 @@ public class LogWindow : Window, IDisposable
                     };
                     ImGui.TextColored(color, $"{e.Time:HH:mm:ss} {tag} {e.Text}");
                 }
-                if (_autoScroll && entries.Count > 0)
-                {
-                    ImGui.SetScrollY(0f); // 列表新->旧：顶部即最新一条
-                }
+                // 列表是 新->旧（顶部即最新）。旧写法每帧无条件 SetScrollY(0)，
+                // 用户往下拉看历史会被强行拽回顶部——即「默认置顶、无法自由翻动」。
+                // 改为只在用户已停在顶部时才跟随，离开顶部后不再干预。
+                if (entries.Count > 0) Plugin.FollowNewest(_autoScroll, newestAtTop: true);
             }
         }
 

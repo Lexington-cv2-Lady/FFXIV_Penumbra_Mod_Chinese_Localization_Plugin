@@ -23,7 +23,7 @@ namespace FFXIVPenumbraHanhua.Services;
 /// ③ <b>起手 about:blank</b>：直接 Navigate 到 wiki 页面会被 CF 拦（NavigationCompleted IsSuccess=False）；
 ///    先停在 about:blank（必定成功）待命。但 about:blank 是<b>不透明源</b>，页内 fetch wiki 属<b>跨源</b>、
 ///    必被 CORS 拒（2026-10-13 实测：<c>ExecuteScriptAsync</c> 返回非字符串 → 旧代码抛 JsonException）——
-///    故取数前须先导航到 <b>wiki 同源页</b>（见 <see cref="ShowCaptchaWindow"/>：弹可见窗口请司令官过 CF，
+///    故取数前须先导航到 <b>wiki 同源页</b>（见 <see cref="ShowCaptchaWindow"/>：弹可见窗口请过 CF，
 ///    导航完成后 WebView2 即停在同源页，后续 fetch 同源可取，cf_clearance 亦在持久 profile 内复用）。
 /// ④ <b>窗口类名每实例唯一</b>（<see cref="NewWindowClassName"/>）：窗口类是<b>进程级全局命名资源</b>，
 ///    固定类名在热重载后 RegisterClassEx 必撞名（1410）——新窗口沿用旧实例的 WndProc，排空的是旧 DLL
@@ -137,7 +137,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     private Thread? _thread;
     private volatile bool _disposed;
     private volatile bool _captchaPending;
-    private volatile bool _captchaWindowVisible; // 验证窗口正在显示（司令官操作中）：此时消息泵永不空闲自退
+    private volatile bool _captchaWindowVisible; // 验证窗口正在显示（人工操作中）：此时消息泵永不空闲自退
     private long _lastPumpActivityTicks;         // 上次业务投递（fetch/弹窗）时间：空闲自退判据（Interlocked 读写）
     private Timer? _watchdog;
     private int _watchdogCount;
@@ -178,7 +178,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary>
     /// 用户数据目录（WebView2 profile）。<b>必须是持久目录</b>：cf_clearance 等 cookie 存在 profile 里，
     /// 用临时/每次新建的目录等于每次都是「零 cookie 全新浏览器」→ 被 CF 当 bot 拦（2026-10-11 实测）。
-    /// 持久化后，司令官手动过一次验证留下的 cookie 会一直复用，后续抓取自动带上。
+    /// 持久化后，手动过一次验证留下的 cookie 会一直复用，后续抓取自动带上。
     /// </summary>
     private readonly string _profileDir;
 
@@ -188,7 +188,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _profileDir = profileDir;
     }
 
-    /// <summary> 抓取时发现是 Cloudflare 验证页、且当前没有可用 cookie 时触发，供 UI 弹窗请司令官手动过一次。 </summary>
+    /// <summary> 抓取时发现是 Cloudflare 验证页、且当前没有可用 cookie 时触发，供 UI 弹窗请手动过一次。 </summary>
     public Action? OnCaptchaNeeded { get; set; }
 
     /// <summary> 验证窗口被用户关闭时触发（供 UI 从断点自动续跑）。 </summary>
@@ -200,7 +200,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 当前窗口类名（每实例唯一；重启时更换——供测试锁「重启必须换类名」）。 </summary>
     internal string WindowClassName => _wndClassName;
 
-    /// <summary> 验证窗口是否正显示（司令官操作中）：供 service 判断「是否正处于人工验证中」以屏蔽 curl 回退。 </summary>
+    /// <summary> 验证窗口是否正显示（人工操作中）：供 service 判断「是否正处于人工验证中」以屏蔽 curl 回退。 </summary>
     internal bool CaptchaWindowVisible => _captchaWindowVisible;
 
     /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。线程已死时自动重起（空闲自退后的懒重启）。 </summary>
@@ -343,7 +343,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
                                   + (raw == null ? "(null)" : raw.Length == 0 ? "(空串)" : Truncate(raw, 200)));
                         // 返回值不是 JSON 字符串（典型为 null）：当前页（起手 about:blank 是不透明源）与 wiki
                         // 不同源，页内 fetch 被跨源策略拒，请求根本没到达服务器（2026-10-13 实测形态）。
-                        // 解法：弹验证窗口先导航到 wiki 同源页（请司令官过 CF），之后重试即同源可取。
+                        // 解法：弹验证窗口先导航到 wiki 同源页（请过 CF），之后重试即同源可取。
                         EnterCaptchaPending("fetch 未取得文本响应（当前页与 wiki 不同源，跨源 fetch 被拒，需先导航到 wiki 同源页）");
                         result = null;
                         break;
@@ -352,7 +352,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
                         if (text != null && CloudflareChallengeDetector.IsChallenge(text))
                         {
                             // 仍是挑战页 → 本 profile 还没有通过验证的 cookie。
-                            // 触发人工验证：请司令官在可见的 WebView2 窗口里点一次 CF 验证，
+                            // 触发人工验证：请在可见的 WebView2 窗口里点一次 CF 验证，
                             // cookie 存进持久 profile，之后自动抓取即可复用。
                             EnterCaptchaPending("返回 Cloudflare 挑战页");
                         }
@@ -396,7 +396,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     }
 
     /// <summary>
-    /// 在 fetcher 的 WebView2 线程显示窗口并导航到 wiki 页，请司令官手动过一次 Cloudflare 验证。
+    /// 在 fetcher 的 WebView2 线程显示窗口并导航到 wiki 页，请手动过一次 Cloudflare 验证。
     /// 验证通过后 cf_clearance cookie 存入<b>持久 profile</b>，且 WebView2 停在 wiki <b>同源页</b>——
     /// 之后页内 fetch 不再受跨源限制，自动抓取可直接复用，不再需要验证。
     /// 立即返回（异步导航）；日志会记录验证结果。
@@ -404,7 +404,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     public void ShowCaptchaWindow(string url)
     {
         if (_disposed || _ctl == null) return;
-        // 验证窗口一显示就进入「司令官操作中」：消息泵空闲自退必须为其让路
+        // 验证窗口一显示就进入「操作中」：消息泵空闲自退必须为其让路
         // （2026-10-13 16:16 事故：过 CF 验证时线程被绝对 deadline 收掉，前功尽弃）。
         _captchaWindowVisible = true;
         TouchPumpActivity();
@@ -412,7 +412,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
         {
             try
             {
-                _log.Info("[wv2] 显示验证窗口，请司令官在窗口内完成 Cloudflare 验证…");
+                _log.Info("[wv2] 显示验证窗口，请在窗口内完成 Cloudflare 验证…");
                 // 弹到「鼠标所在显示器」的工作区中央：多屏用户（游戏全屏主屏时，按主屏尺寸
                 // 算的居中会落到副屏）压根看不见它——2026-10-13 17:04 实录「弹出来不明显」。
                 var (mx, my) = CenterOnMouseMonitor(CaptchaWidth, CaptchaHeight);
@@ -481,7 +481,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
     /// <summary>
     /// 手动隐藏验证窗口（UI 逃生门）：白窗/窗口被全屏游戏挡住点不到 X 时，
-    /// 司令官可从插件界面点「隐藏验证窗口」把它收掉。注意：隐藏**不**触发
+    /// 可从插件界面点「隐藏验证窗口」把它收掉。注意：隐藏**不**触发
     /// <see cref="OnCaptchaWindowClosed"/>——「收起暂存」与「用户点 X 真正关闭（触发关窗续跑）」
     /// 是两种意图，共用同一信号会让「隐藏」后立即被自动续跑重新弹回（2026-10-13 18:53 实录
     /// 「隐藏功能无效」）。隐藏后 WebView2 与持久 profile/cookie 仍在，可随时「重新打开验证窗口」。
@@ -526,7 +526,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
         // 再撞墙 → 再弹窗，每秒一轮无限循环，日志被刷爆、导航完成事件重复订阅越叠越多。
         if (_captchaPending || _captchaWindowVisible) return;
         _captchaPending = true;
-        _log.Warn($"[wv2] {reason}——需要司令官手动过一次 Cloudflare 验证（将弹出验证窗口）");
+        _log.Warn($"[wv2] {reason}——需要手动过一次 Cloudflare 验证（将弹出验证窗口）");
         try { OnCaptchaNeeded?.Invoke(); } catch { /* UI 未挂载则忽略 */ }
     }
 
@@ -585,7 +585,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
 
     /// <summary>
     /// 手动导入 cf_clearance cookie（B 路径：绕开游戏内验证窗）。
-    /// 在司令官自己的浏览器里过完 Cloudflare 后，把 cf_clearance 的值粘贴进来，本方法把它写入
+    /// 在自己常用的浏览器里过完 Cloudflare 后，把 cf_clearance 的值粘贴进来，本方法把它写入
     /// WebView2 持久 profile 的 CookieManager——之后游戏内抓取自动带上，不再弹可见验证窗（自然无白窗）。
     /// <para>关键：cookie 注入发生在 WebView2 核心层（浏览器进程），<b>不依赖渲染进程绘制</b>，
     /// 故即使游戏内验证窗白屏（渲染被拦），本导入仍可成功。</para>

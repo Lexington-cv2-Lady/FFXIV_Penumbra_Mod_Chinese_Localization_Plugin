@@ -33,6 +33,7 @@ internal static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr CreateWindowEx(uint ex, string cls, string title, uint style, int x, int y, int w, int h, IntPtr p, IntPtr m, IntPtr inst, IntPtr l);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr h);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int n);
+    [DllImport("user32.dll")] private static extern bool SetLayeredWindowAttributes(IntPtr h, uint crKey, byte alpha, uint flags);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr DefWindowProc(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
@@ -46,10 +47,24 @@ internal static class Program
 
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int SW_SHOW = 5;
+    // ★ 不激活地显示：抓取窗口绝不能从游戏手里抢焦点（抢焦点＝掉帧/输入失灵，等同影响游戏）。
+    private const int SW_SHOWNOACTIVATE = 4;
+    private const int SW_HIDE = 0;
     private const uint PM_REMOVE = 0x0001;
     private const uint WM_DESTROY = 0x0002;
-    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    // 幽灵窗样式（2026-10-14 司令官要求「穿透、别影响游戏」）：
+    //   WS_EX_TRANSPARENT  鼠标点击直接穿过去，落到下层窗口（游戏）上——不影响操作
+    //   WS_EX_NOACTIVATE   永远不抢焦点
+    //   WS_EX_TOOLWINDOW   不进任务栏与 Alt-Tab
+    //   WS_EX_LAYERED      配合 SetLayeredWindowAttributes 把不透明度压到几乎为零——不影响观感
+    private const uint WS_EX_TRANSPARENT = 0x00000020;
+    private const uint WS_EX_TOOLWINDOW = 0x00000080;
+    private const uint WS_EX_LAYERED = 0x00080000;
+    private const uint WS_EX_NOACTIVATE = 0x08000000;
+    private const uint LWA_ALPHA = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential)] private struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int px, py; }
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int left, top, right, bottom; }
@@ -68,6 +83,9 @@ internal static class Program
 
     private static IntPtr _hwnd;
     private static CoreWebView2Controller? _ctl;
+    // 宿主窗口形态：ghost（默认，穿透+不抢焦点+近透明）/ visible（调试用，正常可见）/ hidden（真隐藏，实验用）
+    private static string _windowMode = "ghost";
+    private static byte _alpha = 2; // 0-255，ghost 下的不透明度；2/255≈0.8%，肉眼几乎不可见但仍算「可见」
     private static readonly WndProcDelegate WndProcKeep = WndProc;
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "wv2_fetch_helper.log");
     private static bool _hadError;
@@ -96,7 +114,16 @@ internal static class Program
             else if (a.StartsWith("--outdir=", StringComparison.Ordinal)) outDir = a.Substring("--outdir=".Length);
             else if (a.StartsWith("--url=", StringComparison.Ordinal)) singleUrl = a.Substring("--url=".Length);
             else if (a.StartsWith("--outfile=", StringComparison.Ordinal)) outFile = a.Substring("--outfile=".Length);
+            else if (a.StartsWith("--window=", StringComparison.Ordinal)) _windowMode = a.Substring("--window=".Length).Trim().ToLowerInvariant();
+            else if (a.StartsWith("--alpha=", StringComparison.Ordinal)
+                     && byte.TryParse(a.Substring("--alpha=".Length), out var av)) _alpha = av;
         }
+        if (_windowMode != "ghost" && _windowMode != "visible" && _windowMode != "hidden")
+        {
+            Log("[helper] --window 只接受 ghost/visible/hidden，收到：" + _windowMode + "（按 ghost 处理）");
+            _windowMode = "ghost";
+        }
+        Log($"[helper] 窗口形态：{_windowMode}（alpha={_alpha}）");
 
         var jobs = new System.Collections.Generic.List<(string Url, string Out)>();
         if (singleUrl != null && outFile != null)
@@ -147,11 +174,26 @@ internal static class Program
         var wc = new WNDCLASSEX { cbSize = Marshal.SizeOf<WNDCLASSEX>(), lpfnWndProc = WndProcKeep, hInstance = hInst, lpszClassName = cls };
         if (RegisterClassEx(ref wc) == 0) { Log("[helper] RegisterClassEx 失败 " + Marshal.GetLastWin32Error()); return 2; }
 
-        _hwnd = CreateWindowEx(0, cls, "FFXIV 汉化工具 · 正在抓取 wiki（抓完自动关闭，请勿手动关）",
+        // 幽灵窗：鼠标穿透 + 不抢焦点 + 不进 Alt-Tab + 近透明。
+        // 为什么不全隐藏：窗口不可见会被 Chromium 冻结渲染与脚本（游戏内 raw={} 就是同一类成因），
+        // 所以宁可「看得见但几乎看不见」——保留可见性、去掉一切交互与观感干扰。
+        var exStyle = 0u;
+        if (_windowMode == "ghost") exStyle = WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE;
+
+        _hwnd = CreateWindowEx(exStyle, cls, "FFXIV 汉化工具 · 正在抓取 wiki（抓完自动关闭，请勿手动关）",
             WS_OVERLAPPEDWINDOW, 0, 0, 420, 300, IntPtr.Zero, IntPtr.Zero, hInst, IntPtr.Zero);
-        ShowWindow(_hwnd, SW_SHOW);
-        PlaceBottomRight(_hwnd);
-        Log("[helper] 宿主窗口 0x" + _hwnd.ToInt64().ToString("X"));
+        if (_windowMode == "hidden")
+        {
+            ShowWindow(_hwnd, SW_HIDE);
+        }
+        else
+        {
+            // 一律「不激活地显示」：绝不从游戏手里抢焦点。
+            ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+            if (_windowMode == "ghost") SetLayeredWindowAttributes(_hwnd, 0, _alpha, LWA_ALPHA);
+            PlaceBottomRight(_hwnd);
+        }
+        Log("[helper] 宿主窗口 0x" + _hwnd.ToInt64().ToString("X") + " 形态=" + _windowMode);
 
         try
         {
@@ -243,7 +285,8 @@ internal static class Program
             var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
             var mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
             if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi))
-                SetWindowPos(h, IntPtr.Zero, mi.rcWork.right - 440, mi.rcWork.bottom - 340, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                SetWindowPos(h, IntPtr.Zero, mi.rcWork.right - 440, mi.rcWork.bottom - 340, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
         catch { /* 放不到右下角就算了，不影响抓取 */ }
     }

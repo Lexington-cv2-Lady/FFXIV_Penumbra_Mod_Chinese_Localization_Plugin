@@ -342,10 +342,8 @@ public class MainWindow : Window, IDisposable
                 };
                 ImGui.TextColored(color, $"[{e.Time:HH:mm:ss}] {e.Text}");
             }
-            if (show.Count > 0)
-            {
-                ImGui.SetScrollHereY(1f);
-            }
+            // 旧->新（底部即最新）。同理：只在用户已停在底部时才跟随，翻历史时不再被拽回。
+            if (show.Count > 0) Plugin.FollowNewest(true, newestAtTop: false);
         }
 
         // 一键汉化（无 Key）指引弹窗

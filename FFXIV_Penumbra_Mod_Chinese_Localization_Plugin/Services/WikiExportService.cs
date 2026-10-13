@@ -49,7 +49,7 @@ public sealed class WikiExportService : IDisposable
     /// <summary>
     /// 插件实际抓取的 API 端点（不含 <c>gapprefix</c>）。UI 的「在浏览器中打开」按钮也用它，
     /// 保证两处永远一致——2026-10-14 教训：按钮里写了个**不带任何参数**的裸 api.php，
-    /// MediaWiki 于是返回「API 帮助页」，司令官看到的永远是个正常网页，既拿不到 JSON
+    /// MediaWiki 于是返回「API 帮助页」，看到的永远是个正常网页，既拿不到 JSON
     /// 也无从判断 CF 到底拦没拦（「又绕回来了」的真因）。
     /// </summary>
     public const string ApiEndpoint = "https://cdn.huijiwiki.com/ff14/api.php?action=query&generator=allpages&format=json&utf8=1"
@@ -326,7 +326,11 @@ public sealed class WikiExportService : IDisposable
             catch (OperationCanceledException)
             {
                 try { p.Kill(true); } catch { /* 已退出 */ }
-                _log.Warn("[wv2] 外部抓取器超时（120s）——回退内嵌 WebView2");
+                // 区分「真超时」与「被调用方取消」（插件卸载 / 用户中止）——否则日志一律写超时，
+                // 会把「插件正好在卸载」误读成「抓取器跑了 120s 还没完」（2026-10-14 06:06:50 实录）。
+                _log.Warn(ct.IsCancellationRequested
+                    ? "[wv2] 外部抓取器被调用方取消（插件卸载/中止）——回退内嵌 WebView2"
+                    : "[wv2] 外部抓取器超时（120s）——回退内嵌 WebView2");
                 return null;
             }
 
@@ -404,7 +408,7 @@ public sealed class WikiExportService : IDisposable
         }
     }
 
-    /// <summary> 抓取遇到 Cloudflare 验证页时触发（参数=被拦的 wiki URL；供 UI 弹窗请司令官手动过一次，cookie 存进持久 profile 后自动复用）。 </summary>
+    /// <summary> 抓取遇到 Cloudflare 验证页时触发（参数=被拦的 wiki URL；供 UI 弹窗请手动过一次，cookie 存进持久 profile 后自动复用）。 </summary>
     public Action<string>? OnCaptchaNeeded
     {
         get => _onCaptchaNeeded;
@@ -427,7 +431,7 @@ public sealed class WikiExportService : IDisposable
     private string? CurrentUrl { get; set; }
     private Action<string>? _onCaptchaNeeded;
 
-    /// <summary> 弹出 WebView2 验证窗口，请司令官手动过一次 Cloudflare 验证（cookie 存入持久 profile，后续自动复用）。 </summary>
+    /// <summary> 弹出 WebView2 验证窗口，请手动过一次 Cloudflare 验证（cookie 存入持久 profile，后续自动复用）。 </summary>
     public void ShowCaptcha(string url) => _wv2?.ShowCaptchaWindow(url);
 
     /// <summary> 隐藏验证窗口（UI 逃生门：白窗/被全屏游戏挡住点不到 X 时从插件界面收起）。 </summary>
@@ -534,7 +538,7 @@ public sealed class WikiExportService : IDisposable
     // ⚠ 本表是硬编码的官方译名，**不来自 wiki 抓取**（故不受 CDN 风控影响）。
     //    Wildwood 官方译名为「森林之民」（2026-09-23 经灰机种族页与国服更新笔记核实，
     //    并同日更正过词典三处）；早前此处误写「森岭之民」，wiki 抓取时会把错字一并写入
-    //    种族.json（2026-10-11 司令官截图指出）。改本表务必同步核对词典与 wiki 侧。
+    //    种族.json（2026-10-11 用户截图指出）。改本表务必同步核对词典与 wiki 侧。
     internal static readonly (string En, string Zh)[] RaceTerms =
     {
         ("Hyur", "人族"), ("Elezen", "精灵族"), ("Lalafell", "拉拉菲尔族"), ("Miqo'te", "猫魅族"),
