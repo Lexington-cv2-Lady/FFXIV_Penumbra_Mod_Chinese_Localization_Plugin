@@ -108,7 +108,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// </summary>
     internal static string NewWindowClassName() => "PMHWebView2FetcherV2_" + Guid.NewGuid().ToString("N");
 
-    private readonly string _wndClassName = NewWindowClassName();
+    private string _wndClassName = NewWindowClassName(); // 非 readonly：重启时换新 Guid，防与未退完的旧线程自撞（1410）
 
     private static WndProcDelegate? _wndProcKeep;
     private IntPtr _hwnd;
@@ -179,6 +179,9 @@ internal sealed class WebView2WikiFetcher : IDisposable
     /// <summary> 是否正处于「等待人工验证」状态（fetch 因跨源/挑战页失败且已通知 UI 弹窗）。 </summary>
     public bool CaptchaPending => _captchaPending;
 
+    /// <summary> 当前窗口类名（每实例唯一；重启时更换——供测试锁「重启必须换类名」）。 </summary>
+    internal string WindowClassName => _wndClassName;
+
     /// <summary> 启动抓取器（独立 STA 线程）；立即返回，不阻塞调用方。线程已死时自动重起（空闲自退后的懒重启）。 </summary>
     public void Start()
     {
@@ -214,7 +217,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     {
         if (_disposed || _thread?.IsAlive == true) return;
         _log.Info("[wv2] 抓取线程不在（此前空闲自退），自动重启…");
-        _captchaPending = false;
+        ResetForRestart(); // 关键：换类名防 1410 自撞 + 清死窗口/控制器引用 + 清就绪态（否则「就绪」等待被旧值瞬间骗过）
         Start();
         var deadline = DateTime.UtcNow.AddSeconds(20); // 初始化实测约 2 秒，给足余量
         while (!_disposed && DateTime.UtcNow < deadline)
@@ -223,6 +226,26 @@ internal sealed class WebView2WikiFetcher : IDisposable
             Thread.Sleep(200);
         }
         _log.Warn("[wv2] 重启后 20 秒仍未就绪，本次提取回退 curl");
+    }
+
+    /// <summary>
+    /// 重启前状态重置（幂等；2026-10-13 16:56 实测教训——不重置的懒重启三连炸）：
+    /// ① 类名必须换新 Guid：旧线程被 WM_QUIT 收走后窗口/类名的释放与退出有窗口期，
+    ///    复用旧类名会 RegisterClassEx 自撞（1410，日志实录）；
+    /// ② <c>_hwnd</c>/<c>_ctl</c> 必须清：旧窗口随旧线程退出被 Windows 销毁，旧控制器随之失效——
+    ///    不清则「重启后就绪」被旧 <c>_available/_ctl</c> 值瞬间骗过（假就绪），
+    ///    且后续会拿死窗口句柄创建控制器（COMException 无效的窗口句柄 0x80070578）。
+    /// </summary>
+    internal void ResetForRestart()
+    {
+        _wndClassName = NewWindowClassName();
+        _ctl = null;
+        _hwnd = IntPtr.Zero;
+        _available = false;
+        _captchaPending = false;
+        _captchaWindowVisible = false;
+        _lastError = null;
+        LastPumpActivity = DateTime.UtcNow;
     }
 
     /// <summary> 空闲回收：超过 <see cref="PumpIdleExitLimit"/> 无业务投递且验证窗口不可见 → WM_QUIT 自退。 </summary>
@@ -236,7 +259,12 @@ internal sealed class WebView2WikiFetcher : IDisposable
         _log.Info("[wv2] 消息泵空闲超过 10 分钟，STA 线程自退（WebView2 进程组已释放；下次提取自动重启，cookie 在持久 profile 内不丢失）");
         MarkUnavailable("消息泵空闲自退（下次提取自动重启）");
         _captchaPending = false;
+        // 先发退出信号（此刻窗口句柄还有效），再清引用：
+        // 旧窗口随线程退出被 Windows 销毁、旧控制器随之失效——清引用可防懒重启的
+        // 「就绪等待」被这些死值瞬间骗过（假就绪），也便于 GC 回收。
         if (_hwnd != IntPtr.Zero) { try { PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { /* 已退 */ } }
+        _ctl = null;
+        _hwnd = IntPtr.Zero;
     }
 
     /// <summary> 初始化超过 45 秒仍未就绪时定期上报（约 3 分钟后停止刷屏）。 </summary>
@@ -558,6 +586,15 @@ internal sealed class WebView2WikiFetcher : IDisposable
     {
         try
         {
+            if (_hwnd == IntPtr.Zero)
+            {
+                // 宿主窗口没建成（注册/建窗失败，或重启时被重置）：绝不能拿零/死句柄
+                // 创建控制器——2026-10-13 16:56 实录 COMException「无效的窗口句柄 (0x80070578)」
+                _lastError = "宿主窗口不可用（窗口创建失败或已销毁）";
+                _available = false;
+                _log.Error("[wv2] 宿主窗口不可用，放弃 WebView2 初始化，回退 curl");
+                return;
+            }
             // 持久 profile 目录（插件配置目录内，随插件存续）
             Directory.CreateDirectory(_profileDir);
             _log.Info("[wv2] 使用持久 profile：" + _profileDir);

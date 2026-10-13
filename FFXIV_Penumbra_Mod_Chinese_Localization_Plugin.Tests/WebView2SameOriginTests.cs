@@ -240,4 +240,38 @@ public class WebView2FetchUnavailableTests
         var exactly = now.AddMinutes(-10);
         Assert.True(WebView2WikiFetcher.PumpShouldReap(now, exactly, captchaWindowVisible: false, TimeSpan.FromMinutes(10)));
     }
+
+    // ============ 懒重启前的状态重置（2026-10-13 16:56 实测三连炸） ============
+
+    [Fact]
+    public void ResetForRestart_换窗口类名_防与未退完旧线程自撞()
+    {
+        // 实录：重启复用旧类名 → 旧线程未退完（窗口/类名释放中）→ RegisterClassEx 1410
+        var f = new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+        var before = f.WindowClassName;
+        f.ResetForRestart();
+        Assert.NotEqual(before, f.WindowClassName);
+        Assert.StartsWith("PMHWebView2FetcherV2_", f.WindowClassName);
+    }
+
+    [Fact]
+    public void ResetForRestart_清就绪与验证态_防假就绪骗过等待()
+    {
+        // 实录：旧 _available/_ctl 死值让「重启后就绪」瞬间误报，随后拿死窗口建控制器 → COMException
+        var f = new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+        f.ResetForRestart();
+        Assert.False(f.IsAvailable);
+        Assert.False(f.CaptchaPending);
+        Assert.Null(f.LastError);
+    }
+
+    [Fact]
+    public void ResetForRestart_重复调用_每次类名都不同()
+    {
+        var f = new WebView2WikiFetcher(new AppLog(), System.IO.Path.GetTempPath());
+        f.ResetForRestart();
+        var a = f.WindowClassName;
+        f.ResetForRestart();
+        Assert.NotEqual(a, f.WindowClassName);
+    }
 }
