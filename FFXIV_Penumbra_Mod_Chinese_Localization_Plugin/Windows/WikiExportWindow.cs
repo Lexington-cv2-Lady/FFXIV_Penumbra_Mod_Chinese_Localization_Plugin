@@ -130,6 +130,31 @@ public class WikiExportWindow : Window, IDisposable
                     StartExtract(dictDir);
                 }
             }
+            // 等待人工验证期间：逃生按钮与「开始提取」并列（白窗/窗口被全屏游戏挡住时一眼能找到）
+            if (_awaitingCaptchaResume)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("重新打开验证窗口##CapReopenTop"))
+                {
+                    _captchaWindowClosed = false;
+                    _plugin.Wiki.ShowCaptcha(_lastCaptchaUrl ?? "https://cdn.huijiwiki.com/ff14/api.php");
+                    _result += "\n[提示] 已重新弹出验证窗口。";
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("隐藏验证窗口##CapHideTop"))
+                {
+                    _plugin.Wiki.HideCaptchaWindow();
+                    _result += "\n[提示] 验证窗口已隐藏（WebView2 与 cookie 保留，可随时重新打开）。";
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("停止等待##CapStopTop"))
+                {
+                    _awaitingCaptchaResume = false;
+                    _captchaWindowClosed = false;
+                    _captchaResumeUsed = false;
+                    _result += "\n[提示] 已停止自动续跑；重新点「开始提取」即可（断点已保存）。";
+                }
+            }
         }
         if (ImGui.IsItemHovered())
         {
@@ -187,34 +212,7 @@ public class WikiExportWindow : Window, IDisposable
         {
             _awaitingCaptchaResume = false;
             _captchaWindowClosed = false;
-            _captchaResumeUsed = true; // 一次性：续跑若再撞墙，回到上面 -4 分支只提示不自动续跑
-            StartExtract(dictDir, "[提示] 验证窗口已关闭，从断点继续提取…");
-        }
-
-        // 等待人工验证期间的手动操作区（白窗/窗口被游戏挡住点不到 X 时的逃生门）
-        if (_awaitingCaptchaResume)
-        {
-            ImGui.Separator();
-            if (ImGui.Button("重新打开验证窗口##CaptchaReopen"))
-            {
-                _captchaWindowClosed = false;
-                _plugin.Wiki.ShowCaptcha(_lastCaptchaUrl ?? "https://cdn.huijiwiki.com/ff14/api.php");
-                _result += "\n[提示] 已重新弹出验证窗口。";
-            }
-            ImGui.SameLine();
-            if (ImGui.Button("隐藏验证窗口##CaptchaHide"))
-            {
-                _plugin.Wiki.HideCaptchaWindow();
-                _result += "\n[提示] 验证窗口已隐藏（WebView2 与 cookie 保留，可随时重新打开）。";
-            }
-            ImGui.SameLine();
-            if (ImGui.Button("停止等待，手动重来##CaptchaStop"))
-            {
-                _awaitingCaptchaResume = false;
-                _captchaWindowClosed = false;
-                _captchaResumeUsed = false;
-                _result += "\n[提示] 已停止自动续跑；重新点「开始提取」即可（断点已保存）。";
-            }
+            StartExtract(dictDir, "[提示] 验证窗口已关闭，从断点继续提取…", isResume: true);
         }
     }
 
@@ -231,12 +229,14 @@ public class WikiExportWindow : Window, IDisposable
     }
 
     /// <summary> 按当前勾选启动提取。<paramref name="resumeNote"/> 非空时作为结果区首行（验证后自动续跑用）。 </summary>
-    private void StartExtract(string dictDir, string? resumeNote = null)
+    private void StartExtract(string dictDir, string? resumeNote = null, bool isResume = false)
     {
-        // 新的一轮（含验证后自动续跑）：清掉上一轮的验证等待状态与续跑机会（新一轮重新武装）
+        // 新的一轮：清掉上一轮的验证等待状态。
+        // ⚠ _captchaResumeUsed 仅「用户主动开新轮」才重置——续跑（isResume=true）绝不 clears：
+        // 2026-10-13 18:36 实录，续跑分支置 true 后进这里被清 false，一次性防护形同虚设，风暴继续。
         _awaitingCaptchaResume = false;
         _captchaWindowClosed = false;
-        _captchaResumeUsed = false;
+        _captchaResumeUsed = isResume; // 续跑=true（机会已用，再撞墙只提示）；用户新轮=false（重新武装）
 
         var prefixes = new List<string>();
         if (_perCat)

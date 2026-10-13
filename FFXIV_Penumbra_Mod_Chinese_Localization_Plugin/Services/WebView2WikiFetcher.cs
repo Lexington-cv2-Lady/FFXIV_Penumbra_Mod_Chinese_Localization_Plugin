@@ -87,6 +87,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT rc);
 
@@ -404,6 +405,15 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 var (mx, my) = CenterOnMouseMonitor(CaptchaWidth, CaptchaHeight);
                 MoveWindow(_hwnd, mx, my, CaptchaWidth, CaptchaHeight, true);
                 ShowWindow(_hwnd, SW_SHOW);
+                SyncWebViewBounds();
+                // WebView2 已知坑（2026-10-13 联网搜到的多案例实测，与 18:36 白窗症状完全吻合）：
+                // 在隐藏宿主窗口上初始化的控制器，显示时渲染层可能「卡住」不重绘——白屏，
+                // 直到鼠标移动等外部事件才唤醒（WPF 案例：第二次及以后显示必白，第一次正常）。
+                // 解法（该案例博主原话「百分百有效」）：抢焦点 + 轻微改变尺寸再恢复，强制重绘。
+                SetFocus(_hwnd);
+                MoveWindow(_hwnd, mx, my, CaptchaWidth + 1, CaptchaHeight, true);
+                MoveWindow(_hwnd, mx, my, CaptchaWidth, CaptchaHeight, true);
+                SyncWebViewBounds();
                 // FFXIV 是无边框全屏：普通 ShowWindow 不会把窗口带到前台，用户既看不见也点不着
                 // （turnstile 交互要求窗口可接收输入）——三连：置前 + 临时置顶 + 抢焦点。
                 // SetForegroundWindow 在本进程（ffxiv）内调用不受系统前台锁限制；
@@ -411,6 +421,7 @@ internal sealed class WebView2WikiFetcher : IDisposable
                 BringWindowToTop(_hwnd);
                 SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                 SetForegroundWindow(_hwnd);
+                SetFocus(_hwnd);
                 // WebView2 控制器是在「隐藏」宿主窗口上初始化的，不会自动合成画面；
                 // 显示后必须按宿主客户区**显式重设 Bounds** 才会渲染
                 // （2026-10-13 实测：只 MoveWindow+ShowWindow 会是整片空白，页面加载了但不合成）。
@@ -675,9 +686,13 @@ internal sealed class WebView2WikiFetcher : IDisposable
             _log.Info("[wv2] 正在创建 WebView2 环境…"
                       + (options != null ? "（显式指定 runtime：" + options + "）" : "（自动探测 runtime）"));
 
+            // 2026-10-13 18:36 白窗事故 + 联网多案例实证：WebView2 嵌在游戏（DX 全屏）内时，
+            // GPU 合成常与游戏冲突——渲染进程活着、导航也成功，但画面全白。
+            // 解法：强制软件渲染（--disable-gpu --disable-gpu-compositing）。
+            var envOpts = new CoreWebView2EnvironmentOptions("--disable-gpu --disable-gpu-compositing");
             CoreWebView2Environment env;
-            if (options != null) env = await CoreWebView2Environment.CreateAsync(options, _profileDir);
-            else env = await CoreWebView2Environment.CreateAsync(_profileDir);
+            if (options != null) env = await CoreWebView2Environment.CreateAsync(options, _profileDir, envOpts);
+            else env = await CoreWebView2Environment.CreateAsync(null, _profileDir, envOpts); // 无显式 runtime：自动探测
 
             _ctl = await env.CreateCoreWebView2ControllerAsync(_hwnd);
             _log.Info("[wv2] 控制器已绑定，停在 about:blank…");
