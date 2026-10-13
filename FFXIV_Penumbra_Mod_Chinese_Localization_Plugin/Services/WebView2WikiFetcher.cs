@@ -674,6 +674,18 @@ internal sealed class WebView2WikiFetcher : IDisposable
     }
 
     /// <summary> 在 WebView2 线程完成初始化：环境 → 控制器 → 停在 about:blank（铁律③）。 </summary>
+    /// <summary>
+    /// 构造 WebView2 启动参数（纯函数，便于单测）。
+    /// 默认强制软件渲染（--disable-gpu --disable-gpu-compositing）绕开游戏内 GPU 合成冲突；
+    /// <paramref name="emergency"/>=true（环境变量 PMH_WV2_NO_SANDBOX=1）时追加
+    /// --no-sandbox --disable-features=RendererCodeIntegrity，尝试绕过火绒对渲染进程的代码完整性钩子
+    /// （2026-10-14 选项 A 应急兜底；会放松 Chromium 沙箱，仅排障用，验证后应撤除环境变量）。
+    /// </summary>
+    internal static string BuildWebView2Args(bool emergency)
+        => emergency
+            ? "--disable-gpu --disable-gpu-compositing --no-sandbox --disable-features=RendererCodeIntegrity"
+            : "--disable-gpu --disable-gpu-compositing";
+
     private async Task InitWebView2Async()
     {
         try
@@ -698,7 +710,17 @@ internal sealed class WebView2WikiFetcher : IDisposable
             // 2026-10-13 18:36 白窗事故 + 联网多案例实证：WebView2 嵌在游戏（DX 全屏）内时，
             // GPU 合成常与游戏冲突——渲染进程活着、导航也成功，但画面全白。
             // 解法：强制软件渲染（--disable-gpu --disable-gpu-compositing）。
-            var envOpts = new CoreWebView2EnvironmentOptions("--disable-gpu --disable-gpu-compositing");
+            // 2026-10-14 选项 A 应急兜底：本机实测火绒(HipsDaemon)注入 ffxiv_dx11.exe 进程树、
+            // 在游戏内静默阻止 WebView2 渲染进程绘制（renderer 不崩、导航成功、但画面全白，无 ProcessFailed）。
+            // 环境变量 PMH_WV2_NO_SANDBOX=1 时追加 --no-sandbox --disable-features=RendererCodeIntegrity，
+            // 尝试绕过火绒对渲染进程的代码完整性钩子。默认关闭：该组合会放松 Chromium 沙箱，仅排障用。
+            var emergency = Environment.GetEnvironmentVariable("PMH_WV2_NO_SANDBOX");
+            var emergencyOn = !string.IsNullOrWhiteSpace(emergency)
+                && (emergency == "1" || emergency.Equals("true", StringComparison.OrdinalIgnoreCase));
+            if (emergencyOn)
+                _log.Warn("[wv2] 应急渲染模式已启用（PMH_WV2_NO_SANDBOX）：追加 --no-sandbox --disable-features=RendererCodeIntegrity，"
+                          + "Chromium 沙箱已放松，仅用于验证火绒是否拦截渲染；验证后请删除该环境变量恢复默认。");
+            var envOpts = new CoreWebView2EnvironmentOptions(BuildWebView2Args(emergencyOn));
             CoreWebView2Environment env;
             if (options != null) env = await CoreWebView2Environment.CreateAsync(options, _profileDir, envOpts);
             else env = await CoreWebView2Environment.CreateAsync(null, _profileDir, envOpts); // 无显式 runtime：自动探测

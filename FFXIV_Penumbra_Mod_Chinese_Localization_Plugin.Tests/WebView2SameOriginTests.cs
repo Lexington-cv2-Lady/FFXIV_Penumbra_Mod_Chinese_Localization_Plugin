@@ -355,3 +355,32 @@ public class WebView2CaptchaWindowEscapeTests
         Assert.Equal(expected, WikiExportService.ShouldSkipCurlFallback(body, windowVisible));
     }
 }
+
+/// <summary>
+/// 回归测试：WebView2 应急渲染参数（2026-10-14 选项 A 应急兜底）。
+/// <para>
+/// 背景：本机实测火绒(HipsDaemon)注入 ffxiv_dx11.exe 进程树、在游戏内静默阻止 WebView2 渲染进程绘制
+/// （renderer 不崩、导航成功、画面全白，无 ProcessFailed）。应急开关（环境变量 PMH_WV2_NO_SANDBOX=1）
+/// 追加 --no-sandbox --disable-features=RendererCodeIntegrity，尝试绕过火绒对渲染进程的代码完整性钩子。
+/// 本文件锁住参数构造的纯函数判据。
+/// </para>
+/// </summary>
+public class WebView2EmergencyArgsTests
+{
+    [Fact]
+    public void BuildWebView2Args_默认_仅软件渲染()
+    {
+        // 默认（关应急）：只强制软件渲染，绝不放松沙箱
+        Assert.Equal("--disable-gpu --disable-gpu-compositing", WebView2WikiFetcher.BuildWebView2Args(false));
+    }
+
+    [Fact]
+    public void BuildWebView2Args_应急_追加no_sandbox与RendererCodeIntegrity()
+    {
+        var a = WebView2WikiFetcher.BuildWebView2Args(true);
+        Assert.Contains("--no-sandbox", a);
+        Assert.Contains("--disable-features=RendererCodeIntegrity", a);
+        // 软件渲染仍保留
+        Assert.Contains("--disable-gpu --disable-gpu-compositing", a);
+    }
+}
