@@ -34,8 +34,12 @@ public class Configuration : IPluginConfiguration
     /// <summary> 【默认开】Penumbra 更新/重下模组、把中文还原成英文后，自动用离线词典把译文覆盖回一次（只改 Name/Description 文本，绝不重置选项启用/选择状态；无需 Key、不联网）。可取消。 </summary>
     public bool AutoReHanhuaOnUpdate { get; set; } = true;
 
-    // ── wiki 提取：WebView2 直抓（真实浏览器指纹，绕开 CDN 对脚本的 Cloudflare 风控）──
-    /// <summary> 【默认开·实验】wiki 抓取改用 WebView2（真实浏览器指纹，绕开 CDN 对脚本客户端的 Cloudflare 风控）。未就绪/失败自动回退 curl；需本机装有 WebView2 Runtime（Win11 预装、Win10 常需手动装）。 </summary>
+    // ── wiki 提取：内嵌 WebView2 直抓（已废弃，2026-10-14 移除）──
+    /// <summary>
+    /// ⚠ 已废弃、不再生效：内嵌 WebView2 抓取在游戏里脚本压根不执行（<c>ExecuteScriptAsync</c> 恒返回 <c>{}</c>），
+    /// 且取数失败时会弹一个<b>永远白屏</b>的验证窗口，已于 2026-10-14 整体移除。
+    /// wiki 抓取现走「游戏外独立进程抓取器」（真实浏览器引擎）。字段保留只为兼容旧配置文件，删除会导致既有配置键被忽略。
+    /// </summary>
     public bool EnableWebView2Fetch { get; set; } = true;
 
     // ── AI 翻译设置 ──

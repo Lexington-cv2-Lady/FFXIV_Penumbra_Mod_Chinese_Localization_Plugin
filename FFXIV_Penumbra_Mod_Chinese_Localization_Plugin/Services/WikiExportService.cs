@@ -17,6 +17,14 @@ namespace FFXIVPenumbraHanhua.Services;
 /// Wiki 词条提取：从灰机 wiki（cdn.huijiwiki.com/ff14/api.php）抓取 FFXIV 官方中/英名，
 /// 按分类写入 词典目录\wiki_术语对照\&lt;分类&gt;.json（分类提取）或 汇总.json（汇总提取）。
 /// 语义与独立版一致：增量更新（已有词条不覆盖）、黑名单过滤、噪音词拒绝、Race 固定词表并入、空分类跳过。
+/// <para>
+/// ★ 取数架构（2026-10-14 定型，此前走过一条已废弃的死路，勿再回头）：
+/// 取数只有两条腿——① <b>外部抓取器</b>（游戏外独立进程 + 真实浏览器引擎，第一优先级）；
+/// ② <b>curl / HttpClient</b>（兜底，多数情况下会被 Cloudflare 拦）。
+/// <b>「游戏内嵌 WebView2」已整体移除</b>：实测它在游戏里 <c>ExecuteScriptAsync</c> 恒返回 <c>{}</c>
+/// （renderer 进程活着、导航成功，但脚本压根不执行），控制器重建直接报 0x80070270；
+/// 且它还会在取数失败时弹一个<b>永远白屏</b>的验证窗口。那条链一行不剩，见 2026-10-14 日志。
+/// </para>
 /// </summary>
 public sealed class WikiExportService : IDisposable
 {
@@ -39,9 +47,6 @@ public sealed class WikiExportService : IDisposable
 
     private readonly AppLog _log;
     private readonly HttpClient _http;
-
-    /// <summary> 可选的 WebView2 抓取器（真实浏览器指纹取数，绕开 CDN 对脚本的风控）；null=只用 curl。 </summary>
-    private readonly WebView2WikiFetcher? _wv2;
 
     /// <summary> 抓取用 UA（curl 与 HttpClient 共用）。 </summary>
     private const string UserAgentValue = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FFXIVPenumbraHanhua";
@@ -89,98 +94,74 @@ public sealed class WikiExportService : IDisposable
     /// </summary>
     private static string? s_pluginDir;
 
-    public WikiExportService(AppLog log, bool enableWebView2 = false, string? wv2ProfileDir = null, string? pluginDir = null)
+    /// <summary>
+    /// 抓取器初始化。
+    /// </summary>
+    /// <param name="log">日志。</param>
+    /// <param name="pluginDir">
+    /// 插件 DLL 所在目录（由 <see cref="Plugin"/> 从 Dalamud 的 <c>PluginInterface.AssemblyLocation</c> 传入）。
+    /// 定位随插件发布的 <c>wv2_fetch_helper.exe</c> **必须靠它**：Dalamud 常以字节流加载插件，
+    /// 此时 <c>Assembly.Location</c> 为空字符串，而 <c>AppContext.BaseDirectory</c> 指向游戏目录——
+    /// 两个候选都找不到 exe（2026-10-14 05:35 实测「未找到外部抓取器」正是这么来的）。
+    /// </param>
+    public WikiExportService(AppLog log, string? pluginDir = null)
     {
         _log = log;
         if (!string.IsNullOrEmpty(pluginDir)) s_pluginDir = pluginDir;
         _http = new HttpClient();
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentValue);
         _http.Timeout = TimeSpan.FromSeconds(30);
-        if (enableWebView2 && !string.IsNullOrWhiteSpace(wv2ProfileDir))
-        {
-            _wv2 = new WebView2WikiFetcher(_log, wv2ProfileDir!);
-            _wv2.Start(); // 独立线程异步初始化；未就绪/失败自动回退 curl 路径
-            _wv2.OnCaptchaWindowClosed = () => OnCaptchaWindowClosed?.Invoke();
-        }
     }
 
     /// <summary>
     /// 释放抓取资源（插件卸载/热重载时由 <see cref="Plugin"/> 调用）。
-    /// 2026-10-13 14:16 实测教训：卸载链若漏放 WebView2 抓取器，僵尸控制器会滞留
-    /// msedgewebview2 进程并拖住<b>共享</b>浏览器进程，新实例 fetch 卡死 30s——
-    /// 故卸载必须显式关闭 fetcher（STA 线程、控制器、隐藏窗口、看门狗一并收）。
-    /// 调用方需保证先取消进行中的提取（<see cref="WikiExportWindow.Dispose"/> 已做）。
     /// </summary>
     public void Dispose()
     {
-        try { _wv2?.Dispose(); } catch { /* 卸载路径不因清理异常而中断 */ }
-        try { _http?.Dispose(); } catch { /* 同上 */ }
+        try { _http?.Dispose(); } catch { /* 卸载路径不因清理异常而中断 */ }
     }
 
     /// <summary>
     /// 取数据页正文（含节流与退避）。
     /// 灰机 wiki 的 CDN 是 Cloudflare。早期它主要按 TLS 握手指纹（JA3/JA4）打分，.NET 的 SChannel 指纹会被拦，
-    /// 故仍优先用系统自带 curl.exe（指纹更接近浏览器）。
+    /// 故仍保留 curl.exe（指纹更接近浏览器）作兜底。
     /// 但 2026-10 实测：**风控已升级到「速率/行为」维度**——短时间内密集请求会把出口 IP 拉黑（curl 指纹同样不放行），
     /// 且冷却长达数十分钟到数小时。因此本方法统一做两件事：
     /// ① 请求节流：相邻请求之间至少间隔 <see cref="RequestIntervalMs"/> 毫秒；
     /// ② 失败退避：网络失败按 10s/30s 退避重试，重试耗尽才放弃。
     /// 命中 Cloudflare 挑战页时**不重试**（反复试只会延长封禁），交由调用方全局中止。
+    /// <para>
+    /// ★ 2026-10-14 架构定型：取数＝**外部抓取器（游戏外独立进程 + 真实浏览器引擎）→ curl → HttpClient**。
+    /// 「游戏内嵌 WebView2」已整体移除——它在游戏里脚本压根不执行（<c>ExecuteScriptAsync</c> 恒返回 <c>{}</c>），
+    /// 而且一旦回退到它，就会弹一个<b>永远白屏</b>的验证窗口（2026-10-14 13:12 实录：取消提取 → 回退内嵌 → raw={{}} → 弹白窗）。
+    /// 故此处**不再有任何"需要人工验证"分支**：取不到就是取不到，如实上报，绝不弹窗。
+    /// </para>
     /// </summary>
-    /// <returns>(正文, 是否被风控拦截, 是否需人工完成 Cloudflare 验证)。被拦时正文为 null 且第二项为 true；
-    /// 需验证时第三项为 true——调用方应中止本轮（不打 curl，避免延长 IP 冷却），待验证后从断点续跑。</returns>
-    private async Task<(string? Body, bool Blocked, bool NeedCaptcha)> FetchAsync(string url, CancellationToken ct)
+    /// <returns>(正文, 是否被风控拦截)。被拦时正文为 null 且第二项为 true。</returns>
+    private async Task<(string? Body, bool Blocked)> FetchAsync(string url, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
-            if (ct.IsCancellationRequested) return (null, false, false);
-            if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false, false);
+            // ★ 取消必须第一时间短路：旧代码取消后仍继续往下走，被"取不到正文"的分支当成
+            //   「需要人工过 CF 验证」，于是弹出一个白窗——用户明明按了取消，却跳出个验证窗。
+            if (ct.IsCancellationRequested) return (null, false);
+            if (!await ThrottleAsync(ct).ConfigureAwait(false)) return (null, false);
 
-            // 取数优先级：WebView2（真实浏览器指纹）→ curl → HttpClient。
-            // WebView2 未就绪/失败即回退 curl，故「WebView2 不可用」只会退回现状，不会让功能更差；
-            // 但 WebView2 明确「需要同源上下文/人工验证」时**不打 curl**——脚本客户端只会被 CF 拦，
-            // 反复试还会延长出口 IP 冷却，此时应中止等验证后续跑（NeedCaptcha）。
-            var wv2 = _wv2;
-            // ★ 取数优先级（2026-10-14 重排）：**外部抓取器**（游戏外独立进程、真实浏览器引擎）
-            //   → 内嵌 WebView2 → curl → HttpClient。
-            //   为什么把它提到最前：游戏内嵌 WebView2 的 JS **压根不执行**——renderer 进程活着、
-            //   导航 IsSuccess=True，但 ExecuteScriptAsync 恒返回 {}（05:20 诊断实证），防冻结参数亦无效；
-            //   而同一引擎在游戏外 0.2 秒就取回真实 JSON。独立进程跑浏览器正是 Browsingway 的做法
-            //   （renderer 独立进程 + 离屏），它因此能在全屏与 G-SYNC 下正常工作。
             var body = await FetchViaExternalHelperAsync(url, ct).ConfigureAwait(false)
-                       ?? await FetchViaWebView2(url, ct).ConfigureAwait(false);
-            // 2026-10-13 18:53 反馈 + 火绒环境实证（游戏外复现 renderer 正常、游戏内白屏）：
-            // 验证窗口正打开、用户正在手动过 Cloudflare 验证期间，不要回退 curl——
-            // 脚本客户端必被 CF 拦（返回 -3）且会延长出口 IP 冷却；应等用户关窗后续跑
-            // （WebV2 已停在 wiki 同源页，关窗后续跑即同源可取）。
-            if (ShouldSkipCurlFallback(body, wv2?.CaptchaWindowVisible == true))
-                return (null, false, true);
-            switch (DecideAfterWebView2(body, wv2?.CaptchaPending == true))
-            {
-                case Wv2Decision.NeedCaptcha:
-                    return (null, false, true);
-                case Wv2Decision.Accept:
-                    // 兜底：万一带回挑战页（理论上 Decide 已拦），仍按被拦处理
-                    if (CloudflareChallengeDetector.IsChallenge(body)) return (null, true, false);
-                    return (body, false, false);
-                default:
-                    body = await TryCurlAsync(url, ct).ConfigureAwait(false)
-                           ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
-                    break;
-            }
+                       ?? await TryCurlAsync(url, ct).ConfigureAwait(false)
+                       ?? await TryHttpAsync(url, ct).ConfigureAwait(false);
 
             if (body != null)
             {
                 // 拿到内容但是 Cloudflare 挑战页：确认被风控，立刻上报，不再重试
-                if (CloudflareChallengeDetector.IsChallenge(body))
-                    return (null, true, false);
-                return (body, false, false);
+                if (CloudflareChallengeDetector.IsChallenge(body)) return (null, true);
+                return (body, false);
             }
 
-            if (ct.IsCancellationRequested) return (null, false, false);
-            if (attempt >= MaxRetries) return (null, false, false);
+            if (ct.IsCancellationRequested) return (null, false);
+            if (attempt >= MaxRetries) return (null, false);
             if (!await DelayAsync(attempt == 0 ? RetryDelayFirstMs : RetryDelayNextMs, ct).ConfigureAwait(false))
-                return (null, false, false);
+                return (null, false);
         }
     }
 
@@ -362,37 +343,6 @@ public sealed class WikiExportService : IDisposable
         }
     }
 
-    /// <summary> WebView2 取数后的分流决策（纯函数，可单测；反例锁「未启用/未就绪必须回退 curl」）。 </summary>
-    internal enum Wv2Decision
-    {
-        /// <summary> 采用 WebView2 取到的正文。 </summary>
-        Accept,
-        /// <summary> WebView2 没取到且未报等待验证：按旧行为回退 curl/HttpClient 保底。 </summary>
-        FallbackCurl,
-        /// <summary> 需要人工完成 Cloudflare 验证（跨源失败或挑战页）：中止本轮，关窗后从断点续跑。 </summary>
-        NeedCaptcha,
-    }
-
-    /// <summary>
-    /// WebView2 取到 <paramref name="body"/> 后怎么走。
-    /// </summary>
-    internal static Wv2Decision DecideAfterWebView2(string? body, bool captchaPending)
-    {
-        if (body != null)
-            return CloudflareChallengeDetector.IsChallenge(body) ? Wv2Decision.NeedCaptcha : Wv2Decision.Accept;
-        // 没取到正文：抓取器报「等待验证」→ 等验证续跑；否则（未启用/未就绪/真失败）→ 回退 curl 保底
-        return captchaPending ? Wv2Decision.NeedCaptcha : Wv2Decision.FallbackCurl;
-    }
-
-    /// <summary>
-    /// 验证窗口正打开、用户正在手动过 Cloudflare 验证、且 WebView2 未取得正文时，
-    /// 是否应跳过 curl 回退（避免脚本客户端必 -3 且延长出口 IP 冷却），改等用户关窗后续跑。
-    /// 纯函数，便于单测；仅当「没取到正文」且「验证窗口正显示」才拦截——取到正文（数据/挑战页）
-    /// 一律交给 <see cref="DecideAfterWebView2"/> 走正常分流。
-    /// </summary>
-    internal static bool ShouldSkipCurlFallback(string? body, bool captchaWindowVisible)
-        => body == null && captchaWindowVisible;
-
     /// <summary> 可取消等待；被取消返回 false（不抛异常，交由调用方按 ct 判定）。 </summary>
     private static async Task<bool> DelayAsync(int ms, CancellationToken ct)
     {
@@ -406,47 +356,6 @@ public sealed class WikiExportService : IDisposable
         {
             return false;
         }
-    }
-
-    /// <summary> 抓取遇到 Cloudflare 验证页时触发（参数=被拦的 wiki URL；供 UI 弹窗请手动过一次，cookie 存进持久 profile 后自动复用）。 </summary>
-    public Action<string>? OnCaptchaNeeded
-    {
-        get => _onCaptchaNeeded;
-        set
-        {
-            _onCaptchaNeeded = value;
-            if (_wv2 != null)
-                _wv2.OnCaptchaNeeded = () =>
-                {
-                    var u = CurrentUrl;
-                    if (u != null) _onCaptchaNeeded?.Invoke(u);
-                };
-        }
-    }
-
-    /// <summary> WebView2 验证窗口被用户关闭时触发（UI 据此从断点自动续跑提取）。 </summary>
-    public Action? OnCaptchaWindowClosed { get; set; }
-
-    /// <summary> 本轮正在请求的 URL（供挑战事件回传给 UI）。 </summary>
-    private string? CurrentUrl { get; set; }
-    private Action<string>? _onCaptchaNeeded;
-
-    /// <summary> 弹出 WebView2 验证窗口，请手动过一次 Cloudflare 验证（cookie 存入持久 profile，后续自动复用）。 </summary>
-    public void ShowCaptcha(string url) => _wv2?.ShowCaptchaWindow(url);
-
-    /// <summary> 隐藏验证窗口（UI 逃生门：白窗/被全屏游戏挡住点不到 X 时从插件界面收起）。 </summary>
-    public void HideCaptchaWindow() => _wv2?.HideCaptchaWindow();
-
-    /// <summary> B 路径：导入 cf_clearance cookie 到持久 profile（绕开游戏内验证窗）。 </summary>
-    public Task<string> ImportCfClearanceAsync(string raw)
-        => _wv2 != null ? _wv2.ImportCfClearanceAsync(raw)
-            : Task.FromResult("WebView2 抓取器未初始化（请确认已启用 WebView2 抓取且本机装有 Runtime）。");
-
-    /// <summary> WebView2（真实浏览器指纹）取数；未启用/未就绪/失败均返回 null，交回 curl 路径。 </summary>
-    private Task<string?> FetchViaWebView2(string url, CancellationToken ct)
-    {
-        CurrentUrl = url; // 供挑战事件回传给 UI
-        return Task.FromResult(_wv2 != null && _wv2.IsAvailable ? _wv2.Fetch(url, ct) : null);
     }
 
     /// <summary> HttpClient 兜底取数（curl 缺失/失败时）。 </summary>
@@ -555,9 +464,12 @@ public sealed class WikiExportService : IDisposable
     /// 执行提取。perCat=true 按勾选分类各写一个 json；false 合并写入 汇总.json。
     /// log 用于逐条日志回传；ct 可取消（已抓取部分仍保存）。
     /// 请求带节流（<see cref="RequestIntervalMs"/>）与失败退避；命中 Cloudflare 挑战页立即全局中止（-3），
-    /// 需人工完成验证时中止并等关窗后续跑（-4），
     /// 并保留续抓进度（<see cref="ProgressValidHours"/> 小时内下次运行从断点续抓）。
-    /// 返回：新增术语条数；-1=参数/异常，-2=已取消，-3=被风控拦截中止，-4=需人工完成 Cloudflare 验证（已弹窗，关窗后续跑）。
+    /// <para>
+    /// 取数＝外部抓取器（游戏外独立进程）→ curl → HttpClient。<b>不再有「需要人工过 CF 验证」分支</b>：
+    /// 2026-10-14 移除内嵌 WebView2 后，取不到就是取不到，如实上报并保存断点，绝不弹验证窗口。
+    /// </para>
+    /// 返回：新增术语条数；-1=参数/异常，-2=已取消，-3=被风控拦截中止。
     /// </summary>
     public async Task<int> ExportAsync(IReadOnlyList<string> prefixes, bool perCat, string dictionaryDir,
         Action<string>? log = null, CancellationToken ct = default)
@@ -599,7 +511,6 @@ public sealed class WikiExportService : IDisposable
 
         var cancelled = false;     // 取消时跳出抓取循环，已抓取部分仍在下方写回保存
         var blockedGlobal = false; // 命中 Cloudflare 风控时全局中止，已抓取部分同样写回保存
-        var captchaNeeded = false; // WebView2 需人工过验证：弹窗已由 UI 触发，保存断点中止，关窗后续跑
 
         try
         {
@@ -633,15 +544,7 @@ public sealed class WikiExportService : IDisposable
                     if (gapCont.Length > 0) url += "&gapcontinue=" + Uri.EscapeDataString(gapCont);
                     if (rvCont.Length > 0) url += "&rvcontinue=" + Uri.EscapeDataString(rvCont);
 
-                    var (resp, blocked, needCaptcha) = await FetchAsync(url, ct).ConfigureAwait(false);
-                    if (needCaptcha)
-                    {
-                        // WebView2 需要人工过 Cloudflare 验证（验证窗口已由 UI 弹出）：
-                        // 保存断点中止本轮，**不打 curl**（脚本客户端只会被拦、还延长 IP 冷却）；
-                        // 用户关闭验证窗口后 UI 自动从断点续跑，届时 WebView2 已停在 wiki 同源页。
-                        captchaNeeded = true;
-                        break;
-                    }
+                    var (resp, blocked) = await FetchAsync(url, ct).ConfigureAwait(false);
                     if (blocked)
                     {
                         // 命中 Cloudflare 挑战页：立即全局中止，后续分类不再尝试（继续打只会延长 IP 冷却）
@@ -744,12 +647,6 @@ public sealed class WikiExportService : IDisposable
                                 "已抓取部分仍会保存；请间隔数十分钟或切换网络/代理后重试，切勿连续重试。");
                     break;
                 }
-                if (captchaNeeded)
-                {
-                    log?.Invoke($"[提示] {disp} 需要人工完成 Cloudflare 验证（验证窗口已弹出）：请在窗口内完成验证，" +
-                                "然后关闭验证窗口，插件将自动从断点继续抓取。");
-                    break;
-                }
             }
 
             // 未被取消、未被拦截：全部分类均已抓完，清掉续抓进度（下次为完整抓取，可拾取新增页）
@@ -838,12 +735,6 @@ public sealed class WikiExportService : IDisposable
                 LastResult = "Wiki 提取已取消（已抓取部分已保存）";
                 _log.Info(LastResult);
                 return -2;
-            }
-            if (captchaNeeded)
-            {
-                LastResult = "Wiki 提取需要人工完成 Cloudflare 验证（已抓取部分已保存）：请在验证窗口内完成验证并关闭窗口，插件将自动从断点继续。";
-                _log.Info(LastResult);
-                return -4;
             }
             if (blockedGlobal)
             {

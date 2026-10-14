@@ -21,13 +21,6 @@ public class WikiExportWindow : Window, IDisposable
     private string _result = "";
     private Task<int>? _task;
     private CancellationTokenSource? _cts;
-    private string? _captchaUrl;   // 待人工过验证的 wiki URL（撞 CF 时由 service 回填）
-    private string? _lastCaptchaUrl; // 最近一次待验证的 URL（「重新打开验证窗口」按钮用）
-    private bool _captchaWindowClosed;   // 验证窗口已被用户关闭（fetcher 线程置位）
-    private bool _awaitingCaptchaResume; // 上一轮因等待人工验证而暂停（-4），关窗后应自动续跑
-    private bool _captchaResumeUsed;     // 本轮提取会话的「关窗自动续跑」机会已用掉（一次性，防弹窗风暴）
-    private string _cfInput = "";         // B 路径：粘贴的 cf_clearance 值
-    private string? _cfImportMsg;         // 导入结果（异步回写，下帧 append 到 _result）
     private bool _followLog = true;       // 提取日志「跟随最新」；取消勾选后可自由翻阅历史，滚动条不再被拽回
 
     public WikiExportWindow(Plugin plugin) : base("Wiki 提取###HanhuaWiki")
@@ -41,10 +34,6 @@ public class WikiExportWindow : Window, IDisposable
         };
         _plugin = plugin;
         _wiki = plugin.Wiki;
-        // 撞 Cloudflare 验证时：弹 WebView2 验证窗口，请点一次；cookie 存进持久 profile 后自动复用
-        _wiki.OnCaptchaNeeded = url => _captchaUrl = url;
-        // 验证窗口被关闭：标记置位，Draw 里据此从断点自动续跑
-        _wiki.OnCaptchaWindowClosed = () => _captchaWindowClosed = true;
         _catChecked = new bool[WikiExportService.Categories.Count];
         for (var i = 0; i < _catChecked.Length; i++) _catChecked[i] = true;
     }
@@ -62,54 +51,19 @@ public class WikiExportWindow : Window, IDisposable
         Ui.Hint("请求已内置节流（约 0.7 秒/次）；被风控拦截时请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
         ImGui.Spacing();
 
-        // WebView2 直抓开关：默认开（用真实浏览器指纹绕开 CDN 对脚本的风控）；未就绪/失败自动回退 curl。
-        var wv2On = cfg.EnableWebView2Fetch;
-        if (ImGui.Checkbox("启用 WebView2 抓取（真实浏览器指纹绕开 CDN 风控，需本机已装 WebView2 Runtime；改动后重载插件生效）##Wv2Fetch", ref wv2On))
-        {
-            cfg.EnableWebView2Fetch = wv2On;
-            cfg.Save();
-        }
-        // WebView2 环境预检：没装则提示 + 官方下载链接
-        var wv2Ver = WebView2RuntimeProbe.TryGetInstalledVersion();
-        if (wv2Ver == null)
-        {
-            Ui.Hint("检测到本机未安装 WebView2 Runtime，WebView2 抓取不可用（将回退 curl，多数情况下仍会被 CDN 拦截）。");
-            if (ImGui.Button("打开官方 WebView2 下载页##Wv2Dl"))
-                OpenUrl(WebView2RuntimeProbe.OfficialDownloadUrl);
-        }
-        else
-        {
-            Ui.Hint($"本机 WebView2 Runtime：{wv2Ver}");
-        }
-        ImGui.Spacing();
-
-        // B 路径：绕开游戏内验证窗（火绒等拦渲染导致白窗时尤其有用）。
-        // 思路参考 PCL 启动器「获取微软账号授权 → 开外部浏览器窗口」：认证交给真浏览器去做，
-        // 绝不在游戏内硬嵌一个渲染不出来的 WebView2。
-        Ui.Hint("2026-10-14 实测更正：Cloudflare 按 TLS 指纹识别客户端——真实浏览器引擎直连灰机 API 是通的（游戏外探针用插件同一个 profile，0.2 秒拿到词条 JSON），被拦的只有 curl/HttpClient 这类脚本客户端。所以游戏内白窗并不是 CF 挑战页。");
-        Ui.Hint("手动备一份 cf_clearance 仍是可选退路：点「在浏览器中打开抓取端点」，真浏览器里按 F12 → Application → Cookies → 该站点，复制 cf_clearance 的值粘贴到下方；页面直接返回 JSON 即畅通，无需 cookie。");
-        ImGui.SetNextItemWidth(Math.Max(200f, ImGui.GetContentRegionAvail().X - 300f));
-        ImGui.InputText("##CfClearance", ref _cfInput, 1024);
-        ImGui.SameLine();
-        if (ImGui.Button("导入 cf_clearance##CfImport"))
-        {
-            var input = _cfInput;
-            _ = _plugin.Wiki.ImportCfClearanceAsync(input).ContinueWith(t =>
-            {
-                try { _cfImportMsg = t.GetAwaiter().GetResult(); }
-                catch (Exception ex) { _cfImportMsg = "导入异常：" + ex.Message; }
-            }, TaskScheduler.Default);
-        }
-        ImGui.SameLine();
+        // 2026-10-14 实测结论（已固化，勿再改回去）：
+        // Cloudflare 按 TLS 指纹识别客户端——**真实浏览器引擎直连灰机 API 是通的**（游戏外独立进程抓取器，
+        // 0.2 秒拿到词条 JSON），被拦的只有 curl/HttpClient 这类脚本客户端。
+        // 因此本插件不再在游戏内嵌 WebView2（实测脚本压根不执行，还会弹白屏验证窗），
+        // 取数改走「游戏外独立进程抓取器」；真浏览器里可以直接打开下面的端点自查是否畅通。
         if (ImGui.Button("在浏览器中打开抓取端点##CfOpenBrowser"))
         {
             // 必须开「带全部参数的真实抓取端点」：裸 api.php 只会返回 MediaWiki 的 API 帮助页，
             // 根本看不出 CF 拦没拦（2026-10-14 实测「打开的是正常网站，又绕回来了」的真因）。
             OpenUrl(WikiExportService.ApiEndpoint);
             _result += (_result.Length > 0 ? "\n" : "")
-                       + "[提示] 已用默认浏览器打开插件实际抓取的端点。2026-10-14 实测：真实浏览器引擎访问它"
-                       + "直接返回词条 JSON（CF 按 TLS 指纹放行浏览器、只拦 curl 这类脚本客户端）——"
-                       + "返回 JSON 即畅通，无需 cf_clearance；只有出现「请稍候…」才是被拦，那时再手动取 cookie。";
+                       + "[提示] 已用默认浏览器打开插件实际抓取的端点：返回词条 JSON 即畅通；"
+                       + "若出现「请稍候…」说明当前出口 IP 被 CDN 拦了，请间隔数十分钟或换网络后再试。";
         }
         ImGui.Spacing();
 
@@ -163,32 +117,6 @@ public class WikiExportWindow : Window, IDisposable
                     StartExtract(dictDir);
                 }
             }
-            // 等待人工验证期间：逃生按钮与「开始提取」并列（白窗/窗口被全屏游戏挡住时一眼能找到）
-            if (_awaitingCaptchaResume)
-            {
-                ImGui.SameLine();
-                if (ImGui.Button("重新打开验证窗口##CapReopenTop"))
-                {
-                    _captchaWindowClosed = false;
-                    _plugin.Wiki.ShowCaptcha(_lastCaptchaUrl ?? "https://cdn.huijiwiki.com/ff14/api.php");
-                    _result += "\n[提示] 已重新弹出验证窗口。";
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("隐藏验证窗口##CapHideTop"))
-                {
-                    _plugin.Wiki.HideCaptchaWindow();
-                    _result += "\n[提示] 验证窗口已隐藏（WebView2 与 cookie 保留，可随时重新打开）。";
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("停止等待##CapStopTop"))
-                {
-                    _plugin.Wiki.HideCaptchaWindow(); // 实际收起验证窗口（隐藏不销毁，WebView2/cookie 保留）
-                    _awaitingCaptchaResume = false;
-                    _captchaWindowClosed = false;
-                    _captchaResumeUsed = false;
-                    _result += "\n[提示] 已停止自动续跑并收起验证窗口；重新点「开始提取」即可（断点已保存）。";
-                }
-            }
         }
         if (ImGui.IsItemHovered())
         {
@@ -196,14 +124,6 @@ public class WikiExportWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
-
-        // B 路径导入结果回写（异步拿到的状态串，下一帧并入结果区——避免在 Draw 里 await 卡住界面）
-        if (_cfImportMsg != null)
-        {
-            var m = _cfImportMsg;
-            _cfImportMsg = null;
-            _result += (_result.Length > 0 ? "\n" : "") + "[导入] " + m;
-        }
 
         // 日志结果区（取消「跟随最新」即可自由翻阅，滚动条不再被拽到底部）
         ImGui.Checkbox("跟随最新", ref _followLog);
@@ -219,18 +139,6 @@ public class WikiExportWindow : Window, IDisposable
                 var n = _task.Result;
                 if (n != 0) _plugin.ReloadDictionary();
                 if (n >= 0 && _result.Length == 0) _result = _wiki.LastResult;
-                if (n == -4)
-                {
-                    // 需要人工验证：标记待续跑；提示用户在验证窗口完成验证后关窗即自动继续。
-                    // 但「关窗续跑」机会**一次性**：2026-10-13 18:01 实录弹窗风暴——
-                    // 白窗无法验证 → 用户反复关窗 → 续跑 → 再撞墙 → 再弹窗，每秒一轮无限循环。
-                    // 用掉机会后再撞墙，只提示、不再自动续跑/弹窗，由用户手动决定下一步。
-                    _awaitingCaptchaResume = true;
-                    _result += (_result.Length > 0 ? "\n" : "")
-                        + (_captchaResumeUsed
-                            ? "[提示] 验证仍未完成（断点已保存）。请在验证窗口内完成 Cloudflare 验证后点「重新打开验证窗口」或「开始提取」继续；自动续跑已停止，避免反复弹窗。"
-                            : "[提示] 已弹出验证窗口：请在窗口内完成 Cloudflare 验证，然后关闭验证窗口，插件会自动从断点继续提取。");
-                }
             }
             finally
             {
@@ -238,25 +146,6 @@ public class WikiExportWindow : Window, IDisposable
                 _cts?.Dispose();
                 _cts = null;
             }
-        }
-
-        // 撞 Cloudflare 验证：弹 WebView2 验证窗口，请点一次；cookie 存进持久 profile 后下次自动复用
-        if (_captchaUrl != null)
-        {
-            var url = _captchaUrl;
-            _captchaUrl = null;
-            _lastCaptchaUrl = url; // 记住：白窗/关不掉时「重新打开验证窗口」按钮要用
-            _plugin.Wiki.ShowCaptcha(url);
-            _result += (_result.Length > 0 ? "\n" : "")
-                       + "[提示] 检测到 Cloudflare 验证，已弹出验证窗口：请在窗口内完成验证，插件会自动继续提取。";
-        }
-
-        // 验证窗口关闭 → 自动从断点续跑（仅当上一轮是因等待人工验证而暂停的 -4，且机会未用掉）
-        if (_awaitingCaptchaResume && _captchaWindowClosed && !_captchaResumeUsed && (_task == null || _task.IsCompleted))
-        {
-            _awaitingCaptchaResume = false;
-            _captchaWindowClosed = false;
-            StartExtract(dictDir, "[提示] 验证窗口已关闭，从断点继续提取…", isResume: true);
         }
     }
 
@@ -272,16 +161,9 @@ public class WikiExportWindow : Window, IDisposable
         }
     }
 
-    /// <summary> 按当前勾选启动提取。<paramref name="resumeNote"/> 非空时作为结果区首行（验证后自动续跑用）。 </summary>
-    private void StartExtract(string dictDir, string? resumeNote = null, bool isResume = false)
+    /// <summary> 按当前勾选启动提取。 </summary>
+    private void StartExtract(string dictDir)
     {
-        // 新的一轮：清掉上一轮的验证等待状态。
-        // ⚠ _captchaResumeUsed 仅「用户主动开新轮」才重置——续跑（isResume=true）绝不 clears：
-        // 2026-10-13 18:36 实录，续跑分支置 true 后进这里被清 false，一次性防护形同虚设，风暴继续。
-        _awaitingCaptchaResume = false;
-        _captchaWindowClosed = false;
-        _captchaResumeUsed = isResume; // 续跑=true（机会已用，再撞墙只提示）；用户新轮=false（重新武装）
-
         var prefixes = new List<string>();
         if (_perCat)
         {
@@ -298,7 +180,7 @@ public class WikiExportWindow : Window, IDisposable
             prefixes.AddRange(new[] { "Item/", "Action/", "Quest/", "Achievement/", "Emote/" });
         }
 
-        _result = resumeNote ?? "";
+        _result = "";
         _cts = new CancellationTokenSource();
         _task = Task.Run(async () =>
         {

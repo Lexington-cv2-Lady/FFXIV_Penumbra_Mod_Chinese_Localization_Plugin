@@ -106,10 +106,9 @@ public sealed class Plugin : IDalamudPlugin
         Import = new ImportService(ModFiles, Penumbra, AppLog, Mark, Snapshot);
         Backup = new BackupManager(ModFiles, Penumbra, AppLog, Snapshot, Mark);
         Sumup = new SumupService(AppLog, ModFiles, Snapshot);
-        // 第 4 参＝插件 DLL 真实所在目录：外部抓取器 exe 随插件发布在与 DLL 同级，
+        // 第 2 参＝插件 DLL 真实所在目录：外部抓取器 exe 随插件发布在与 DLL 同级，
         // 但 Dalamud 常以字节流加载插件（Assembly.Location 为空），故必须由这里显式传入。
-        Wiki = new WikiExportService(AppLog, Configuration.EnableWebView2Fetch,
-            System.IO.Path.Combine(PluginInterface.GetPluginConfigDirectory(), "WebView2Profile"),
+        Wiki = new WikiExportService(AppLog,
             System.IO.Path.GetDirectoryName(PluginInterface.AssemblyLocation?.FullName));
         ModRestore = new ModRestoreService();
 
