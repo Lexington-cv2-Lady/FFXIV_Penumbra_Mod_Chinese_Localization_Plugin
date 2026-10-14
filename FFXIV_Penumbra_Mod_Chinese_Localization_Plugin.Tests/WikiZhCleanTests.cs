@@ -72,4 +72,27 @@ public class WikiZhCleanTests
     [Fact]
     public void 空串_原样返回不抛()
         => Assert.Equal("", WikiExportService.CleanWikiZh(""));
+
+    // ===== 反例：URL 不许被清洗规则削坏 =====
+    //
+    // 2026-10-15 国服译名体检（dry-run）时发现：若某条译文混进了形如
+    // 「https://x.com/a-中文-b」的链接，下方那条「英文-中文-」规则会把 "a-中文-"
+    // 当成编者注整段削掉，链接当场报废。故含 "://" 的串一律放行。
+
+    [Fact]
+    public void 含链接的译文_原样返回不予清洗()
+        => Assert.Equal("参考页 https://ffxiv.huijiwiki.com/wiki/Answers_-_乐谱",
+            WikiExportService.CleanWikiZh("参考页 https://ffxiv.huijiwiki.com/wiki/Answers_-_乐谱"));
+
+    [Fact]
+    public void 链接里夹中文连字段_不被当成编者注剥除()
+        => Assert.Equal("https://x.com/a-中文-b",
+            WikiExportService.CleanWikiZh("https://x.com/a-中文-b"));
+
+    [Fact]
+    public void 全角冒号后的中文译名_正常清洗不受链接守卫影响()
+        // 与实际落盘数据一致（用的是全角冒号「：」，见 wiki_术语对照/物品.json）；
+        // IsValidChinese 不排斥全角冒号，故重抓时也能入库
+        => Assert.Equal("管弦乐琴乐谱：生死答问",
+            WikiExportService.CleanWikiZh("管弦乐琴乐谱：Answers\u3000-生死答问-"));
 }

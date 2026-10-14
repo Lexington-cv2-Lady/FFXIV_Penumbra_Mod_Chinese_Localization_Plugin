@@ -884,6 +884,11 @@ public sealed class WikiExportService : IDisposable
     internal static string CleanWikiZh(string zh)
     {
         if (string.IsNullOrEmpty(zh)) return zh;
+
+        // ★ URL 守卫：含 "://" 的字符串一律原样放行，不做任何清洗。
+        //   否则形如 "https://x.com/a-中文-b" 会被下方规则当成「英文-中文-」削掉一段，把链接洗坏。
+        if (zh.Contains("://", StringComparison.Ordinal)) return zh;
+
         var s = zh.Replace('\u3000', ' ').Trim();
 
         // 「英文曲名 -中文译名-」→「中文译名」。英文段允许字母数字与空格撇号，中文段不许再含连字符。
