@@ -184,6 +184,15 @@ public class DictionaryWindow : Window, IDisposable
         }
     }
 
+    /// <summary>
+    /// 统计行「打开」按钮的 ID。**必须带唯一后缀**——ImGui 拿标签文本当 ID 源，
+    /// 多行共用光秃秃一个「打开」会导致 ID 完全相同、点击全错位到第一行
+    /// （2026-10-14 实录：五条统计行里只有「我的翻译.json」点得动，其余四个毫无反应）。
+    /// 与 <see cref="DrawDirectoryRow"/> 的 `##{idPrefix}Open` 同一套规矩；生成逻辑收口在
+    /// <see cref="UiIds.StatOpen"/>（放在不依赖 Dalamud 的类里，便于单测验证唯一性）。
+    /// </summary>
+    private static string StatOpenButtonId(string name) => UiIds.StatOpen(name);
+
     private void DrawStatRow(string name, string path, int count)
     {
         var w = ImGui.GetContentRegionAvail().X;
@@ -195,7 +204,7 @@ public class DictionaryWindow : Window, IDisposable
         // 最左：标准「打开」按钮（与其他按钮风格一致）
         if (exists)
         {
-            if (ImGui.Button("打开", new Vector2(btnW, 0)))
+            if (ImGui.Button(StatOpenButtonId(name), new Vector2(btnW, 0)))
             {
                 OpenPath(path);
             }

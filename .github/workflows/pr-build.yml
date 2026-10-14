@@ -2,7 +2,7 @@ name: Build & Test
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
   build-test:
@@ -21,6 +21,9 @@ jobs:
       run: |
         Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
         Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+    - name: Build fetch helper
+      run: dotnet build tools/wv2_fetch_helper/wv2_fetch_helper.csproj --configuration Release
 
     - name: Build
       run: dotnet build --configuration Release /p:DevPluginDir="${{ runner.temp }}\devPlugins"

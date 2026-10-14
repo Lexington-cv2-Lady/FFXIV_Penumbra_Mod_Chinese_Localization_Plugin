@@ -5,10 +5,13 @@
 //      但 `ExecuteScriptAsync` 恒返回 `{}` —— **脚本压根没执行**（05:20 诊断日志实证）。
 //      1.1.9.6 加的四条防冻结参数（CalculateNativeWinOcclusion / -backgrounding 等）未奏效。
 //   ② 同一引擎、同一 profile、同一 URL，**在游戏外 0.2 秒就取回真实词条 JSON**（wv2_probe 实证）。
-//   ③ Browsingway（本机已装 1.7.2）印证：它在 `renderer/` 下用**独立进程** + `CefSharp.OffScreen`
-//      离屏渲染，再经共享内存回传——**根本不在游戏窗口里建 HWND**，所以全屏与 G-SYNC 下都能用。
+//   ③ 【致谢 · 思路来源，非代码】Browsingway（https://github.com/MeowZWR/Browsingway，
+//      GPL-3.0，fork 自 ackwell 的 BrowserHost，LGPL-3.0/GPL-3.0）印证了「浏览器不放游戏进程里、
+//      改由独立进程承担」这条路在全屏与 G-SYNC 下走得通。**本文件未使用其任何代码**：
+//      它用 CEF（CefSharp.OffScreen）+ 共享内存回传**纹理**以贴进游戏画面；
+//      妾身只用 WebView2 + 普通窗口取 `innerText` **文本**，连画面回传都不需要，比它更简单。
+//      （README「致谢与思路来源」一节有完整划界说明。）
 //   → 结论：游戏内嵌 WebView2 执行 JS 这条路走不通；抓取必须在游戏外独立进程做。
-//     我们只要文本、连画面回传都不需要，比 Browsingway 更简单。
 //
 // 用法（两种模式）：
 //   批量：wv2_fetch_helper --urls=<每行一个 URL 的文件> --outdir=<结果目录>   → 写 0.txt / 1.txt / …
@@ -86,6 +89,11 @@ internal static class Program
     // 宿主窗口形态：ghost（默认，穿透+不抢焦点+近透明）/ visible（调试用，正常可见）/ hidden（真隐藏，实验用）
     private static string _windowMode = "ghost";
     private static byte _alpha = 2; // 0-255，ghost 下的不透明度；2/255≈0.8%，肉眼几乎不可见但仍算「可见」
+    // 独立 profile 目录：由插件经 --profile= 传入（Dalamud 的 GetPluginConfigDirectory() 会自适应各启动器）。
+    // ⚠ 默认值里的启动器名只是兜底——国际版启动器叫 XIVLauncher 而非 XIVLauncherCN，
+    //   写死会让国际版用户的 profile 落到与插件自身不一致的目录下，故必须由插件显式传入。
+    private static string _profileDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "XIVLauncherCN", "pluginConfigs", "FFXIV_Penumbra_Mod_Chinese_Localization_Plugin", "WebView2ProfileFetch");
     private static readonly WndProcDelegate WndProcKeep = WndProc;
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "wv2_fetch_helper.log");
     private static bool _hadError;
@@ -117,6 +125,11 @@ internal static class Program
             else if (a.StartsWith("--window=", StringComparison.Ordinal)) _windowMode = a.Substring("--window=".Length).Trim().ToLowerInvariant();
             else if (a.StartsWith("--alpha=", StringComparison.Ordinal)
                      && byte.TryParse(a.Substring("--alpha=".Length), out var av)) _alpha = av;
+            else if (a.StartsWith("--profile=", StringComparison.Ordinal))
+            {
+                var p = a.Substring("--profile=".Length).Trim();
+                if (p.Length > 0) _profileDir = p;
+            }
         }
         if (_windowMode != "ghost" && _windowMode != "visible" && _windowMode != "hidden")
         {
@@ -166,8 +179,9 @@ internal static class Program
     private static int RunJobs(System.Collections.Generic.List<(string Url, string Out)> jobs)
     {
         // 独立 profile：游戏可能正在跑，插件那个 profile 被占用会让 CreateAsync 静默挂起。
-        var profileDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "XIVLauncherCN", "pluginConfigs", "FFXIV_Penumbra_Mod_Chinese_Localization_Plugin", "WebView2ProfileFetch");
+        // 目录由插件经 --profile= 传入（见字段注释）；未传则用兜底默认值。
+        var profileDir = _profileDir;
+        Log("[helper] 使用 profile：" + profileDir);
 
         var hInst = GetModuleHandle(null);
         var cls = "Wv2Fetch_" + Guid.NewGuid().ToString("N");

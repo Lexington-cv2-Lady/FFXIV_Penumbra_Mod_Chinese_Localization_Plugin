@@ -80,6 +80,20 @@ https://raw.githubusercontent.com/Lexington-cv2-Lady/FFXIV_Penumbra_Mod_Chinese_
 
 本项目采用 **AGPL-3.0** 开源协议——你可以自由使用、修改和分发，但修改后的作品必须同样以 AGPL-3.0 开源。
 
+## 🙏 致谢与思路来源
+
+本插件的 **wiki 词条抓取器**（`tools/wv2_fetch_helper`）在**架构思想**上受 [Browsingway](https://github.com/MeowZWR/Browsingway)（GPL-3.0，fork 自 ackwell 的 [BrowserHost](https://github.com/ackwell/BrowserHost)，LGPL-3.0 / GPL-3.0 双许可）启发：它证明了「浏览器不塞进游戏进程、改由独立进程承担」可以避开全屏与 G-SYNC 下的渲染问题。
+
+**未使用其任何代码。** 两者技术栈与用途均不同——
+
+| | Browsingway | 本插件抓取器 |
+|---|---|---|
+| 浏览器栈 | CEF（`CefSharp.OffScreen`） | Microsoft WebView2 |
+| 交付内容 | 把网页**纹理**经共享内存回传、贴进游戏画面 | 只取 `document.body.innerText` **文本**，写临时文件回传 |
+| 进程形态 | 游戏进程 + renderer 进程 + 纹理共享内存 | 游戏进程外的独立 exe，抓完即退 |
+
+若你认为上述借鉴仍需进一步处置，欢迎提 issue 联系。
+
 ## 🛠 构建与打包
 
 ```powershell

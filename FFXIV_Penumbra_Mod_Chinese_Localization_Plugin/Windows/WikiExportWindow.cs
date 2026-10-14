@@ -51,22 +51,6 @@ public class WikiExportWindow : Window, IDisposable
         Ui.Hint("请求已内置节流（约 0.7 秒/次）；被风控拦截时请间隔数十分钟或换网络后再试，插件会自动从上次断点续抓。");
         ImGui.Spacing();
 
-        // 2026-10-14 实测结论（已固化，勿再改回去）：
-        // Cloudflare 按 TLS 指纹识别客户端——**真实浏览器引擎直连灰机 API 是通的**（游戏外独立进程抓取器，
-        // 0.2 秒拿到词条 JSON），被拦的只有 curl/HttpClient 这类脚本客户端。
-        // 因此本插件不再在游戏内嵌 WebView2（实测脚本压根不执行，还会弹白屏验证窗），
-        // 取数改走「游戏外独立进程抓取器」；真浏览器里可以直接打开下面的端点自查是否畅通。
-        if (ImGui.Button("在浏览器中打开抓取端点##CfOpenBrowser"))
-        {
-            // 必须开「带全部参数的真实抓取端点」：裸 api.php 只会返回 MediaWiki 的 API 帮助页，
-            // 根本看不出 CF 拦没拦（2026-10-14 实测「打开的是正常网站，又绕回来了」的真因）。
-            OpenUrl(WikiExportService.ApiEndpoint);
-            _result += (_result.Length > 0 ? "\n" : "")
-                       + "[提示] 已用默认浏览器打开插件实际抓取的端点：返回词条 JSON 即畅通；"
-                       + "若出现「请稍候…」说明当前出口 IP 被 CDN 拦了，请间隔数十分钟或换网络后再试。";
-        }
-        ImGui.Spacing();
-
         Ui.Hint($"词典目录：{dictDir}（{(dictOk ? "存在" : "不存在，请先在「目录和词典管理」里配置词典目录")}）");
         ImGui.Spacing();
         ImGui.Separator();
@@ -146,18 +130,6 @@ public class WikiExportWindow : Window, IDisposable
                 _cts?.Dispose();
                 _cts = null;
             }
-        }
-    }
-
-    private static void OpenUrl(string url)
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch
-        {
-            /* 打开失败可忽略 */
         }
     }
 

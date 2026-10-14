@@ -70,16 +70,19 @@ public class WikiExportNoWv2Tests
         Assert.DoesNotContain("ShouldSkipCurlFallback", methods);
     }
 
-    /// <summary> 构造函数只应接受 (AppLog, string?)——不再有 WebView2 开关与 profile 参数。 </summary>
+    /// <summary> 构造函数只应接受 (AppLog, string?, string?)——不再有 WebView2 开关与 profile 参数。 </summary>
     [Fact]
     public void 构造函数签名不再含WebView2参数()
     {
         var ctors = Service.GetConstructors();
         Assert.Single(ctors);
         var ps = ctors[0].GetParameters();
-        Assert.Equal(2, ps.Length);
+        // ① AppLog 日志；② 插件 DLL 目录（定位随插件发布的抓取器 exe，Dalamud 字节流加载时必传）；
+        // ③ 插件配置目录（抓取器独立 profile 落点，随启动器自适应，不硬编码 XIVLauncherCN）。
+        Assert.Equal(3, ps.Length);
         Assert.Equal(typeof(AppLog), ps[0].ParameterType);
         Assert.Equal(typeof(string), ps[1].ParameterType);
+        Assert.Equal(typeof(string), ps[2].ParameterType);
     }
 
     /// <summary>

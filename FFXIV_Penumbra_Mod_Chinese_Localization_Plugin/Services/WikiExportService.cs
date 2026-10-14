@@ -94,6 +94,10 @@ public sealed class WikiExportService : IDisposable
     /// </summary>
     private static string? s_pluginDir;
 
+    /// <summary> 抓取器（wv2_fetch_helper.exe）的独立 profile 目录，由 <see cref="Plugin"/> 经 Dalamud 的
+    /// <c>GetPluginConfigDirectory()</c> 传入——随启动器自适应，不硬编码启动器名。 </summary>
+    private static string? s_fetchProfileDir;
+
     /// <summary>
     /// 抓取器初始化。
     /// </summary>
@@ -104,10 +108,15 @@ public sealed class WikiExportService : IDisposable
     /// 此时 <c>Assembly.Location</c> 为空字符串，而 <c>AppContext.BaseDirectory</c> 指向游戏目录——
     /// 两个候选都找不到 exe（2026-10-14 05:35 实测「未找到外部抓取器」正是这么来的）。
     /// </param>
-    public WikiExportService(AppLog log, string? pluginDir = null)
+    public WikiExportService(AppLog log, string? pluginDir = null, string? pluginConfigDir = null)
     {
         _log = log;
         if (!string.IsNullOrEmpty(pluginDir)) s_pluginDir = pluginDir;
+        // 抓取器的独立 profile 目录。必须由 Dalamud 的 GetPluginConfigDirectory() 传进来：
+        // 它会随启动器（XIVLauncherCN / XIVLauncher）自适应；写死启动器名会让国际版用户的
+        // profile 落到与插件自身不一致的目录下。
+        if (!string.IsNullOrWhiteSpace(pluginConfigDir))
+            s_fetchProfileDir = Path.Combine(pluginConfigDir, "WebView2ProfileFetch");
         _http = new HttpClient();
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgentValue);
         _http.Timeout = TimeSpan.FromSeconds(30);
@@ -271,8 +280,8 @@ public sealed class WikiExportService : IDisposable
                 var incomplete = HelperSearchDirs().Exists(HelperDeployIncomplete);
                 _log.Warn(incomplete
                     ? "[wv2] 外部抓取器部署不完整（只有 wv2_fetch_helper.exe，缺同名托管 dll / runtimeconfig.json）——"
-                      + "apphost 无法启动，抓取仍走内嵌 WebView2/curl 老路"
-                    : "[wv2] 未找到外部抓取器 wv2_fetch_helper.exe（未随插件发布）——抓取仍走内嵌 WebView2/curl 老路");
+                      + "apphost 无法启动，本页改走 curl/HttpClient 兜底"
+                    : "[wv2] 未找到外部抓取器 wv2_fetch_helper.exe（未随插件发布）——本页改走 curl/HttpClient 兜底");
             }
             return null;
         }
@@ -294,6 +303,9 @@ public sealed class WikiExportService : IDisposable
             };
             psi.ArgumentList.Add("--url=" + url);
             psi.ArgumentList.Add("--outfile=" + outFile);
+            // 显式传入 profile 目录：让国际版启动器（XIVLauncher）用户的 profile 也落在插件自己的配置目录下，
+            // 而不是靠 helper 里那个写死 XIVLauncherCN 的兜底路径。
+            if (!string.IsNullOrEmpty(s_fetchProfileDir)) psi.ArgumentList.Add("--profile=" + s_fetchProfileDir);
             using var p = Process.Start(psi);
             if (p == null) return null;
 
@@ -310,8 +322,8 @@ public sealed class WikiExportService : IDisposable
                 // 区分「真超时」与「被调用方取消」（插件卸载 / 用户中止）——否则日志一律写超时，
                 // 会把「插件正好在卸载」误读成「抓取器跑了 120s 还没完」（2026-10-14 06:06:50 实录）。
                 _log.Warn(ct.IsCancellationRequested
-                    ? "[wv2] 外部抓取器被调用方取消（插件卸载/中止）——回退内嵌 WebView2"
-                    : "[wv2] 外部抓取器超时（120s）——回退内嵌 WebView2");
+                    ? "[wv2] 外部抓取器被调用方取消（插件卸载/中止）——本页不再取数"
+                    : "[wv2] 外部抓取器超时（120s）——本页改走 curl/HttpClient 兜底");
                 return null;
             }
 
@@ -326,7 +338,7 @@ public sealed class WikiExportService : IDisposable
                 _log.Warn($"[wv2] 外部抓取器未取得结果（exit={p.ExitCode}，outFile 存在={File.Exists(outFile)}）"
                           + (errText.Length > 0 ? "；stderr=" + errText.Substring(0, Math.Min(200, errText.Length)) : "")
                           + hint
-                          + "——回退内嵌 WebView2");
+                          + "——本页改走 curl/HttpClient 兜底");
                 return null;
             }
             var text = await File.ReadAllTextAsync(outFile, ct).ConfigureAwait(false);
@@ -854,12 +866,39 @@ public sealed class WikiExportService : IDisposable
             AddTerm(terms, r.En, r.Zh, ref added, ref hitExisting, blacklist, ref rejected, ref noise, ref multi, multiList);
     }
 
+    /// <summary>
+    /// 清洗 wiki 侧取到的中文名（2026-10-14 新增，教训来自用户报障）。
+    /// <para>
+    /// 灰机 wiki 的命名习惯是「&lt;前缀&gt;:&lt;英文曲名&gt; -&lt;中文译名&gt;-」——用连字符把中文译名括起来当编者注。
+    /// 物品「Answers Orchestrion Roll」的中文名因此是
+    /// <c>管弦乐琴乐谱:Answers\u3000-生死答问-</c>，而国服本地化译名其实只有「生死答问」
+    /// （wiki「Endwalker/Answers - Piano」页自述）。原样入库会让游戏内选项出现中英混杂。
+    /// </para>
+    /// 两步：① 全角空格 U+3000 一律折叠成普通空格；② 把「&lt;英文曲名&gt; -&lt;中文译名&gt;-」
+    /// 整段替换成「&lt;中文译名&gt;」——**保留中文、剥掉英文曲名与编者连字符**。
+    /// 反向做法（只剥连字符留下英文）是错的，会把译名洗成纯英文，比不洗更糟。
+    /// </para>
+    /// 安全边界：正则要求**英文曲名在前**，所以「A级精英杀手4」这类等级/型号标识、
+    /// 「生死答问 - 回响」这类本身就用连字符的中文主副标题，都不会被误伤。
+    /// </summary>
+    internal static string CleanWikiZh(string zh)
+    {
+        if (string.IsNullOrEmpty(zh)) return zh;
+        var s = zh.Replace('\u3000', ' ').Trim();
+
+        // 「英文曲名 -中文译名-」→「中文译名」。英文段允许字母数字与空格撇号，中文段不许再含连字符。
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(s,
+            "[A-Za-z][A-Za-z0-9 ':\\-]*\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014]\\s*([^\\x00-\\x7F\\-\\u2010\\u2011\\u2012\\u2013\\u2014]+)\\s*[-\\u2010\\u2011\\u2012\\u2013\\u2014]",
+            "$1");
+        return cleaned.Trim();
+    }
+
     /// <summary> 唯一入库口：校验、噪音/黑名单拒绝、去重、多义统计。 </summary>
     private static void AddTerm(JsonObject terms, string enRaw, string zhRaw, ref int added, ref int hitExisting,
         HashSet<string> blacklist, ref int rejected, ref int noise, ref int multi, List<string> multiList)
     {
         var e = enRaw.Trim();
-        var z = zhRaw.Trim();
+        var z = CleanWikiZh(zhRaw.Trim());
         if (e.Length == 0 || z.Length == 0 || e.Length > 80 || z.Length > 120) return;
         if (!IsValidEnglish(e) || !IsValidChinese(z)) return;
         if (e == z) return;

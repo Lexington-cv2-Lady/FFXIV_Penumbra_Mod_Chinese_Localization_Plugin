@@ -108,8 +108,11 @@ public sealed class Plugin : IDalamudPlugin
         Sumup = new SumupService(AppLog, ModFiles, Snapshot);
         // 第 2 参＝插件 DLL 真实所在目录：外部抓取器 exe 随插件发布在与 DLL 同级，
         // 但 Dalamud 常以字节流加载插件（Assembly.Location 为空），故必须由这里显式传入。
+        // 第 3 参＝Dalamud 给的插件配置目录：抓取器的独立 profile 落在它下面，
+        // 随启动器（XIVLauncherCN / XIVLauncher）自适应，不硬编码启动器名。
         Wiki = new WikiExportService(AppLog,
-            System.IO.Path.GetDirectoryName(PluginInterface.AssemblyLocation?.FullName));
+            System.IO.Path.GetDirectoryName(PluginInterface.AssemblyLocation?.FullName),
+            PluginInterface.GetPluginConfigDirectory());
         ModRestore = new ModRestoreService();
 
         MainWindow = new MainWindow(this, Penumbra, Dict, Hanhua);
